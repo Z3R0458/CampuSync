@@ -35,7 +35,7 @@ Deno.serve(async (request) => {
   const sessionId = typeof claims.session_id === 'string' ? claims.session_id : ''
   const { data: verifiedSession } = await admin.from('login_otp_verified_sessions').select('session_id')
     .eq('session_id', sessionId).eq('auth_user_id', authData.user.id).is('revoked_at', null).gt('expires_at', new Date().toISOString()).maybeSingle()
-  if (claims.schoolguard_otp_verified !== true || !verifiedSession) return respond({ error: 'Email verification is required.' }, 403)
+  if (!verifiedSession) return respond({ error: 'Email verification is required.' }, 403)
   const { data: caller, error: callerError } = await admin.from('profiles')
     .select('id,full_name,email,role,is_active').eq('auth_user_id', authData.user.id).maybeSingle()
   if (callerError || caller?.role !== 'administrator' || !caller.is_active) return respond({ error: 'Administrator permission is required.' }, 403)

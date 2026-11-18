@@ -304,22 +304,12 @@ function AuthGate() {
       setProfileLoading(false)
       return
     }
-    try {
-      const claims = JSON.parse(atob(session.access_token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) as { schoolguard_otp_verified?: boolean }
-      if (claims.schoolguard_otp_verified !== true && !passwordRecovery) {
-        void supabase.auth.signOut()
-        setProfile(null); setProfileLoading(false); setProfileError('Complete email verification before using CampuSync.')
-        return
-      }
-    } catch {
-      if (!passwordRecovery) { void supabase.auth.signOut(); setProfile(null); setProfileLoading(false); setProfileError('The sign-in session is invalid. Please sign in again.'); return }
-    }
     if (passwordRecovery) { setProfile(null); setProfileLoading(false); return }
     let active = true
     setProfileLoading(true)
-    void supabase.from('profiles').select('id, full_name, role, is_active, profile_photo_path')
-      .eq('auth_user_id', session.user.id).maybeSingle()
-      .then(({ data, error }) => {
+    const loadProfile = async () => {
+      const { data, error } = await supabase.from('profiles').select('id, full_name, role, is_active, profile_photo_path')
+        .eq('auth_user_id', session.user.id).maybeSingle()
         if (!active) return
         if (error && !navigator.onLine) {
           try {
@@ -337,7 +327,40 @@ function AuthGate() {
           try { localStorage.setItem(`schoolguard:profile:${session.user.id}`, JSON.stringify({ profile: nextProfile, cachedAt: new Date().toISOString() })) } catch { /* Online sign-in remains available without storage. */ }
         }
         setProfileLoading(false)
-      })
+    }
+    const validateSessionAndLoad = async () => {
+      if (navigator.onLine) {
+        // Validate the server-recorded OTP session directly. This avoids
+        // depending on an optional Auth Hook to inject a custom JWT claim.
+        const { data: verified, error } = await supabase.rpc('schoolguard_login_otp_verified')
+        if (!active) return
+        if (error || verified !== true) {
+          void supabase.auth.signOut()
+          setProfile(null)
+          setProfileLoading(false)
+          setProfileError(error ? 'Could not confirm your verified session. Please try signing in again.' : 'Your verified session could not be found. Please request a new code and sign in again.')
+          return
+        }
+      } else {
+        // Offline guard access can only use a signed claim issued while online.
+        try {
+          const claims = JSON.parse(atob(session.access_token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) as { schoolguard_otp_verified?: boolean }
+          if (claims.schoolguard_otp_verified !== true) {
+            setProfile(null)
+            setProfileLoading(false)
+            setProfileError('Connect to the internet once to confirm this verified sign-in before using offline access.')
+            return
+          }
+        } catch {
+          setProfile(null)
+          setProfileLoading(false)
+          setProfileError('The sign-in session is invalid. Connect to the internet and sign in again.')
+          return
+        }
+      }
+      await loadProfile()
+    }
+    void validateSessionAndLoad()
     return () => { active = false }
   }, [session, passwordRecovery])
 

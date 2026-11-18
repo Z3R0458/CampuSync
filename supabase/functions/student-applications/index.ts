@@ -93,7 +93,7 @@ Deno.serve(async request => {
   let claims: Record<string, unknown>
   try { claims = JSON.parse(atob(token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) } catch { return reply({ error: 'Email verification is required.' }, 403) }
   const { data: verified } = await admin.from('login_otp_verified_sessions').select('session_id').eq('session_id', String(claims.session_id ?? '')).eq('auth_user_id', authData.user.id).is('revoked_at', null).gt('expires_at', new Date().toISOString()).maybeSingle()
-  if (claims.schoolguard_otp_verified !== true || !verified) return reply({ error: 'Email verification is required.' }, 403)
+  if (!verified) return reply({ error: 'Email verification is required.' }, 403)
   const { data: actor } = await admin.from('profiles').select('id,full_name,email,role,is_active').eq('auth_user_id', authData.user.id).maybeSingle()
   if (actor?.role !== 'administrator' || !actor.is_active) return reply({ error: 'Administrator permission is required.' }, 403)
 
