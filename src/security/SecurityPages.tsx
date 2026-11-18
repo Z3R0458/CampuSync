@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Monitor, Smartphone, Tablet, Shield, ShieldAlert, RefreshCw, LogOut, MapPin, Laptop } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { getPersistentDeviceIdentifier } from '../lib/deviceDetection'
 import { friendlyError } from '../components/UserFeedback'
 
 type Profile = { id: string; full_name: string; role: string }
@@ -11,6 +12,7 @@ type Device = {
 }
 type Login = {
   id: string; profile_id: string; device_id: string | null; session_id: string; ip_address: string | null
+  user_agent?: string | null
   approximate_location: string | null; login_at: string; logout_at: string | null; last_activity_at: string
   login_status: string; is_new_device: boolean; email_delivery_status: string | null
   email_delivery_attempts: number
@@ -51,7 +53,7 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
     const [{ data: auth }, devicesResult, loginResult, sessionsResult, alertsResult] = await Promise.all([
       supabase.auth.getSession(),
       supabase.from('user_devices').select('id,device_identifier,device_name,device_type,operating_system,operating_system_version,device_model,screen_category,browser,browser_version,first_seen_at,last_seen_at,is_recognized').order('last_seen_at', { ascending: false }).limit(100),
-      supabase.from('login_activity').select('id,profile_id,device_id,session_id,ip_address,approximate_location,login_at,logout_at,last_activity_at,login_status,is_new_device,email_delivery_status,email_delivery_attempts').order('login_at', { ascending: false }).limit(100),
+      supabase.from('login_activity').select('id,profile_id,device_id,session_id,ip_address,user_agent,approximate_location,login_at,logout_at,last_activity_at,login_status,is_new_device,email_delivery_status,email_delivery_attempts').order('login_at', { ascending: false }).limit(100),
       supabase.from('login_otp_verified_sessions').select('session_id,verified_at,expires_at,revoked_at').order('verified_at', { ascending: false }).limit(100),
       supabase.from('notifications').select('id,payload,created_at,is_read').eq('type', 'security_new_device').order('created_at', { ascending: false }).limit(20),
     ])
@@ -61,7 +63,7 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
       const claims = tokenPart ? JSON.parse(atob(tokenPart.replaceAll('-', '+').replaceAll('_', '/'))) as { session_id?: string } : {}
       setCurrentSessionId(claims.session_id ?? '')
     } catch { setCurrentSessionId('') }
-    try { setCurrentDeviceIdentifier(localStorage.getItem('campusync:device-id') ?? '') } catch { setCurrentDeviceIdentifier('') }
+    try { setCurrentDeviceIdentifier(getPersistentDeviceIdentifier()) } catch { setCurrentDeviceIdentifier('') }
     const errors = [devicesResult.error, loginResult.error, sessionsResult.error, alertsResult.error].filter(Boolean)
     if (errors.length) setError(friendlyError(errors[0]))
     setDevices(devicesResult.data ?? [])
@@ -189,7 +191,7 @@ export function AdminLoginMonitoring() {
     if (!supabase) return
     setLoading(true); setError('')
     const [loginResult, eventResult] = await Promise.all([
-      supabase.from('login_activity').select('id,profile_id,device_id,session_id,ip_address,approximate_location,login_at,logout_at,last_activity_at,login_status,is_new_device,email_delivery_status,email_delivery_attempts').order('login_at', { ascending: false }).limit(500),
+      supabase.from('login_activity').select('id,profile_id,device_id,session_id,ip_address,user_agent,approximate_location,login_at,logout_at,last_activity_at,login_status,is_new_device,email_delivery_status,email_delivery_attempts').order('login_at', { ascending: false }).limit(500),
       supabase.from('login_auth_events').select('id,event_type,auth_user_id,details,created_at').in('event_type', ['failed_login','account_access_denied','otp_verification_failure','otp_expiration']).order('created_at', { ascending: false }).limit(100),
     ])
     const activityRows = loginResult.data ?? []
@@ -224,7 +226,7 @@ export function AdminLoginMonitoring() {
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-slate-600">Successful logins and available failed-authentication events. Location is shown only when collected from a trusted source.</p><button onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm font-semibold disabled:opacity-50"><RefreshCw className="h-4 w-4"/>Refresh</button></div>
     {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     <section className="grid gap-3 rounded-2xl border bg-white p-4 sm:grid-cols-2 lg:grid-cols-3"><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search name, email, role" className="rounded-xl border px-3 py-2 text-sm"/><select value={roleFilter} onChange={event=>setRoleFilter(event.target.value)} className="rounded-xl border bg-white px-3 py-2 text-sm"><option value="all">All roles</option>{['administrator','guard','student','teacher','parent'].map(role=><option key={role} value={role}>{role}</option>)}</select><select value={deviceFilter} onChange={event=>setDeviceFilter(event.target.value)} className="rounded-xl border bg-white px-3 py-2 text-sm"><option value="all">All device types</option>{['Desktop','Laptop','Tablet','Mobile','Unknown'].map(type=><option key={type}>{type}</option>)}</select><label className="text-xs text-slate-500">From<input type="date" value={fromDate} onChange={event=>setFromDate(event.target.value)} className="mt-1 block w-full rounded-xl border px-3 py-2 text-sm text-slate-800"/></label><label className="text-xs text-slate-500">To<input type="date" value={toDate} onChange={event=>setToDate(event.target.value)} className="mt-1 block w-full rounded-xl border px-3 py-2 text-sm text-slate-800"/></label><p className="self-end pb-2 text-sm text-slate-600">{filtered.length} login records</p></section>
-    <section className="overflow-hidden rounded-2xl border bg-white shadow-sm"><div className="border-b p-4"><h2 className="font-bold">Login activity</h2></div>{loading ? <p className="p-5 text-sm text-slate-500">Loading activity…</p> : filtered.length ? <div className="divide-y">{filtered.map(row=>{const profile=profiles.get(row.profile_id);const device=row.device_id?devices.get(row.device_id):undefined;return <article key={row.id} className="grid gap-2 p-4 md:grid-cols-[minmax(12rem,1fr)_minmax(13rem,1.1fr)_minmax(12rem,1fr)]"><div><p className="font-semibold">{profile?.full_name??'Profile unavailable'}</p><p className="text-sm text-slate-600">{profile?.email??'Email unavailable'} · {profile?.role??'Role unavailable'}</p></div><div className="text-sm"><p className="font-semibold">{device?.device_name??'Device details unavailable'}</p><p className="text-slate-600">{device?.browser??'Unknown browser'} {device?.browser_version??''} · {device?.operating_system??'Unknown system'}</p><p className="text-xs text-slate-500">{device?.device_type??'Unknown device type'}</p></div><div className="text-sm md:text-right"><p>{dateTime(row.login_at)}</p><p className="text-xs text-slate-600">{row.login_status.replaceAll('_',' ')}{row.is_new_device?' · New device':''}</p><p className="text-xs text-slate-500">IP {shortIp(row.ip_address)} · {row.approximate_location??'Location not available'}</p></div></article>})}</div>:<p className="p-5 text-sm text-slate-500">No login records match those filters.</p>}</section>
+    <section className="overflow-hidden rounded-2xl border bg-white shadow-sm"><div className="border-b p-4"><h2 className="font-bold">Login activity</h2></div>{loading ? <p className="p-5 text-sm text-slate-500">Loading activity…</p> : filtered.length ? <div className="divide-y">{filtered.map(row=>{const profile=profiles.get(row.profile_id);const device=row.device_id?devices.get(row.device_id):undefined;return <article key={row.id} className="grid gap-2 p-4 md:grid-cols-[minmax(12rem,1fr)_minmax(13rem,1.1fr)_minmax(12rem,1fr)]"><div><p className="font-semibold">{profile?.full_name??'Profile unavailable'}</p><p className="text-sm text-slate-600">{profile?.email??'Email unavailable'} · {profile?.role??'Role unavailable'}</p></div><div className="text-sm"><p className="font-semibold">{device?.device_name??'Device details unavailable'}</p><p className="text-slate-600">{device?.browser??'Unknown browser'} {device?.browser_version??''} · {device?.operating_system??'Unknown system'}</p><p className="text-xs text-slate-500">{device?.device_type??'Unknown device type'}</p>{row.user_agent&&<details className="mt-1 text-xs"><summary className="cursor-pointer text-slate-500">Browser user agent</summary><code className="mt-1 block break-all text-slate-600">{row.user_agent}</code></details>}</div><div className="text-sm md:text-right"><p>{dateTime(row.login_at)}</p><p className="text-xs text-slate-600">{row.login_status.replaceAll('_',' ')}{row.is_new_device?' · New device':''}</p><p className="text-xs text-slate-500">IP {shortIp(row.ip_address)} · {row.approximate_location??'Location not available'}</p></div></article>})}</div>:<p className="p-5 text-sm text-slate-500">No login records match those filters.</p>}</section>
     <section className="rounded-2xl border bg-white p-5 shadow-sm"><h2 className="font-bold">Failed sign-in and verification events</h2><p className="mt-1 text-sm text-slate-500">Failed events are shown with available account references; CampuSync never stores passwords or email codes in this history.</p>{events.length?<div className="mt-3 divide-y">{events.map(event=>{const profile=[...profiles.entries()].find(([id])=>id===event.auth_user_id)?.[1];return <div key={event.id} className="flex flex-wrap justify-between gap-2 py-3 text-sm"><span><b>{event.event_type.replaceAll('_',' ')}</b>{profile?` · ${profile.full_name} (${profile.role})`:''}</span><span className="text-slate-500">{dateTime(event.created_at)}</span></div>})}</div>:<p className="mt-3 text-sm text-slate-500">No failed sign-in events are available.</p>}</section>
   </div>
 }

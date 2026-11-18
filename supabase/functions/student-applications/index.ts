@@ -6,7 +6,6 @@ const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body)
 const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('')
 const clean = (value: unknown, max = 180) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char] ?? char))
-const origins = (Deno.env.get('SCHOOLGUARD_ALLOWED_ORIGINS') ?? '').split(',').map(value => value.trim()).filter(Boolean)
 async function hmac(secret: string, value: string) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name:'HMAC', hash:'SHA-256' }, false, ['sign'])
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))), byte=>byte.toString(16).padStart(2,'0')).join('')
@@ -15,8 +14,9 @@ async function hmac(secret: string, value: string) {
 Deno.serve(async request => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (request.method !== 'POST') return reply({ error: 'Method not allowed.' }, 405)
-  const origin = request.headers.get('Origin')
-  if (!origin || !origins.includes(origin)) return reply({ error:'This origin is not allowed.' },403)
+  // CORS is not an authorization boundary. Vercel preview and installed PWA
+  // hosts vary; authenticated actions below validate the Supabase session,
+  // verified-session record, and active administrator role on every request.
   const url = Deno.env.get('SUPABASE_URL'), anon = Deno.env.get('SUPABASE_ANON_KEY'), key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   const hmacSecret = Deno.env.get('OTP_HMAC_SECRET')
   if (!url || !anon || !key || !hmacSecret) return reply({ error: 'Application service is not configured.' }, 503)
@@ -135,7 +135,12 @@ Deno.serve(async request => {
   })
   if (approveError) {
     await admin.auth.admin.deleteUser(created.user.id)
-    return reply({ error: approveError.message }, 400)
+    console.error('Student application approval transaction failed', { code: approveError.code ?? 'unknown', message: approveError.message })
+    if (/student number or email is already assigned/i.test(approveError.message)) return reply({ error: 'That student number or email is already assigned to an existing account.' }, 409)
+    if (/section does not match grade level/i.test(approveError.message)) return reply({ error: 'The selected section does not match the approved grade level.' }, 400)
+    if (/application is no longer pending/i.test(approveError.message)) return reply({ error: 'This application has already been decided. Refresh the application list.' }, 409)
+    if (/student number and grade level are required/i.test(approveError.message)) return reply({ error: 'Enter the school-issued student number and approved grade level.' }, 400)
+    return reply({ error: `Student records could not be created (database error ${approveError.code ?? 'unknown'}). Please contact support.` }, 500)
   }
   if (approved?.already_approved) {
     await admin.auth.admin.deleteUser(created.user.id)

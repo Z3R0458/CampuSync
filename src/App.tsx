@@ -48,6 +48,7 @@ import type { Session } from '@supabase/supabase-js'
 
 import { addPendingVisitor, getPendingSyncCount, getRecentQueuedAttendance, getRecentVisitors, type CachedVisitorApproval, type PendingVisitorLog } from './lib/db'
 import { isSupabaseConfigured } from './lib/supabaseConfig'
+import { collectDeviceTrackingInfo } from './lib/deviceDetection'
 import { supabase } from './lib/supabase'
 import { getGuardStudentSnapshot, lookupGuardPerson, previewGuardQr, queueApprovedVisitorCheckIn, recordManualScan, recordQrScan, recoverSyncingEvents, refreshApprovedVisitorCache, refreshOfflineQrCache, registerGuardDevice, searchGuardStudents, syncPendingAttendance, syncPendingVisitors, type AttendanceScanResult } from './lib/attendance'
 import type { GateEventType } from './lib/db'
@@ -73,32 +74,6 @@ const roleMeta = [
   { id: 'teacher', label: 'Teacher', path: '/teacher', icon: UserCog },
   { id: 'parent', label: 'Parent', path: '/parent', icon: Users },
 ] as const
-
-type BrowserDeviceInfo = { deviceType: string; operatingSystem: string; operatingSystemVersion: string; browser: string; browserVersion: string; deviceModel: string; screenCategory: string }
-async function collectBrowserDeviceInfo(): Promise<BrowserDeviceInfo> {
-  const nav = navigator as Navigator & { userAgentData?: { mobile?: boolean; platform?: string; brands?: Array<{ brand: string; version: string }>; getHighEntropyValues?: (hints: string[]) => Promise<{ platformVersion?: string; model?: string; fullVersionList?: Array<{ brand: string; version: string }> }> } }
-  const ua = navigator.userAgent
-  const iPad = /iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)
-  const android = /Android/i.test(ua) || /Android/i.test(nav.userAgentData?.platform ?? '')
-  const mobile = /iPhone|iPod|Mobile/i.test(ua) || nav.userAgentData?.mobile === true
-  let os = iPad ? 'iPadOS' : /iPhone|iPod/i.test(ua) ? 'iOS' : android ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Macintosh|Mac OS/i.test(ua) ? 'macOS' : /CrOS/i.test(ua) ? 'ChromeOS' : /Linux/i.test(ua) ? 'Linux' : 'Unknown'
-  let osVersion = iPad ? '' : (ua.match(/(?:Windows NT|Android|iPhone OS|CPU OS|Mac OS X) ([\d._]+)/i)?.[1] ?? '').replaceAll('_', '.')
-  let model = ''
-  let browser = /SamsungBrowser\//i.test(ua) ? 'Samsung Internet' : /Edg\//i.test(ua) ? 'Edge' : /OPR\//i.test(ua) ? 'Opera' : /Firefox\//i.test(ua) ? 'Firefox' : /CriOS\//i.test(ua) ? 'Chrome' : /FxiOS\//i.test(ua) ? 'Firefox' : /Chrome\//i.test(ua) ? 'Chrome' : /Safari\//i.test(ua) ? 'Safari' : 'Unknown'
-  let browserVersion = ua.match(/(?:Edg|SamsungBrowser|OPR|Firefox|CriOS|FxiOS|Chrome|Version)\/([\d.]+)/i)?.[1] ?? ''
-  try {
-    const hints = await nav.userAgentData?.getHighEntropyValues?.(['platformVersion', 'model', 'fullVersionList'])
-    if (hints?.platformVersion) osVersion = hints.platformVersion
-    if (hints?.model) model = hints.model
-    const brands = hints?.fullVersionList ?? nav.userAgentData?.brands ?? []
-    const match = brands.find(item => /Microsoft Edge|Google Chrome|Chromium|Opera/i.test(item.brand))
-    if (match) { browser = /Edge/i.test(match.brand) ? 'Edge' : /Opera/i.test(match.brand) ? 'Opera' : 'Chrome'; browserVersion = match.version }
-    if (nav.userAgentData?.platform === 'Chrome OS') os = 'ChromeOS'
-  } catch { /* User-Agent Client Hints are optional; use the UA fallback. */ }
-  const tablet = iPad || (/Android/i.test(ua) && !mobile) || /Tablet/i.test(ua)
-  const deviceType = tablet ? 'Tablet' : mobile ? 'Mobile' : /Windows|Macintosh|Mac OS|Linux|CrOS/i.test(ua) ? 'Desktop' : 'Unknown'
-  return { deviceType, operatingSystem: os, operatingSystemVersion: osVersion, browser, browserVersion, deviceModel: model, screenCategory: deviceType }
-}
 
 type ActiveProfile = { id: string; full_name: string; role: (typeof roleMeta)[number]['id']; is_active: boolean; profile_photo_path?: string | null }
 
@@ -198,24 +173,8 @@ function LoginScreen() {
   const [challenge, setChallenge] = useState<{ id: string; email: string; expiresAt: string; resendAt: string; firstTime: boolean } | null>(null)
   const [code, setCode] = useState('')
   const [clockNow, setClockNow] = useState(Date.now())
-  const deviceIdRef = useRef('')
-  const getDeviceIdentifier = () => {
-    if (deviceIdRef.current) return deviceIdRef.current
-    const validId = (value: string | null) => value && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(value) ? value : null
-    try {
-      const saved = validId(localStorage.getItem('campusync:device-id'))
-      const id = saved ?? crypto.randomUUID()
-      localStorage.setItem('campusync:device-id', id)
-      deviceIdRef.current = id
-    } catch {
-      try {
-        const saved = validId(sessionStorage.getItem('campusync:device-id'))
-        deviceIdRef.current = saved ?? crypto.randomUUID()
-        sessionStorage.setItem('campusync:device-id', deviceIdRef.current)
-      } catch { deviceIdRef.current = crypto.randomUUID() }
-    }
-    return deviceIdRef.current
-  }
+  const [deviceDiagnostic, setDeviceDiagnostic] = useState<Awaited<ReturnType<typeof collectDeviceTrackingInfo>> | null>(null)
+  useEffect(() => { if (import.meta.env.DEV) void collectDeviceTrackingInfo().then(setDeviceDiagnostic).catch(() => setDeviceDiagnostic(null)) }, [])
   useEffect(() => { const timer = window.setInterval(() => setClockNow(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -226,8 +185,9 @@ function LoginScreen() {
       return
     }
     setSubmitting(true)
-    const deviceInfo = await collectBrowserDeviceInfo()
-    const { data, error: authError } = await client.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password, deviceIdentifier: getDeviceIdentifier(), deviceInfo } })
+    let deviceInfo
+    try { deviceInfo = await collectDeviceTrackingInfo() } catch { setSubmitting(false); setError('This browser cannot create a secure device identifier. Update the browser or use a secure HTTPS connection, then try again.'); return }
+    const { data, error: authError } = await client.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password, deviceIdentifier: deviceInfo.device_identifier, deviceInfo } })
     if (authError) {
       setSubmitting(false)
       setError(await loginFunctionError(authError, data, 'Sign-in could not be completed. Check your email and password, then try again.'))
@@ -246,8 +206,9 @@ function LoginScreen() {
   }
   const verifyCode = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(''); const client = supabase; if (!client || !challenge) return; setSubmitting(true)
-    const deviceInfo = await collectBrowserDeviceInfo()
-    const { data, error: verifyError } = await client.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code, deviceIdentifier: getDeviceIdentifier(), deviceInfo } })
+    let deviceInfo
+    try { deviceInfo = await collectDeviceTrackingInfo() } catch { setSubmitting(false); setError('This browser cannot create a secure device identifier. Update the browser or use a secure HTTPS connection, then try again.'); return }
+    const { data, error: verifyError } = await client.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code, deviceIdentifier: deviceInfo.device_identifier, deviceInfo } })
     if (verifyError || !data?.access_token || !data?.refresh_token) { setSubmitting(false); setError(await loginFunctionError(verifyError, data, 'That code could not be verified. Check it and try again, or request a new one.')); return }
     const { error: sessionError } = await client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
     setSubmitting(false)
@@ -320,6 +281,7 @@ function LoginScreen() {
             </label>
             {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-700">{error}</p>}
             <button disabled={submitting} className="group flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#16794f] px-4 font-semibold text-white shadow-[0_8px_18px_rgba(22,121,79,.18)] transition hover:bg-[#126743] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-700/20 disabled:cursor-wait disabled:opacity-65">{submitting ? 'Signing in…' : <>Sign in securely <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" /></>}</button>
+            {import.meta.env.DEV && deviceDiagnostic && <details className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-slate-700"><summary className="cursor-pointer font-semibold">Development device diagnostic</summary><dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-all"><dt>navigator.userAgent</dt><dd>{deviceDiagnostic.user_agent}</dd><dt>navigator.platform</dt><dd>{navigator.platform || 'Unavailable'}</dd><dt>maxTouchPoints</dt><dd>{navigator.maxTouchPoints}</dd><dt>Operating system</dt><dd>{deviceDiagnostic.operating_system} {deviceDiagnostic.operating_system_version}</dd><dt>Browser</dt><dd>{deviceDiagnostic.browser} {deviceDiagnostic.browser_version}</dd><dt>Device category</dt><dd>{deviceDiagnostic.device_category}</dd><dt>Device ID</dt><dd>{deviceDiagnostic.device_identifier}</dd></dl></details>}
           </form>}
           <button type="button" onClick={() => void sendRecovery()} className="mt-3 block w-full text-right text-xs font-semibold text-emerald-800 underline">Forgot your password?</button>
           {recoveryMessage && <p role="status" className="mt-2 text-xs text-slate-600">{recoveryMessage}</p>}

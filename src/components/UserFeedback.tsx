@@ -4,6 +4,9 @@ import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
 export type NoticeKind = 'success' | 'error' | 'warning' | 'info'
 type NoticeInput = { type: NoticeKind; message: string }
 type Notice = NoticeInput & { id: number }
+export class UserActionError extends Error {
+  constructor(message: string) { super(message); this.name = 'UserActionError' }
+}
 type ConfirmationOptions = {
   title: string
   description: string
@@ -79,7 +82,8 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       if (confirmation.successMessage) notify({ type: 'success', message: confirmation.successMessage })
       finishConfirmation(true)
     } catch (error) {
-      setConfirmation(current => current ? { ...current, error: friendlyError(error) } : current)
+      const message = error instanceof UserActionError ? error.message : friendlyError(error)
+      setConfirmation(current => current ? { ...current, error: message } : current)
       setConfirming(false)
     }
   }

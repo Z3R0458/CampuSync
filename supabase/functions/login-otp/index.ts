@@ -110,15 +110,19 @@ Deno.serve(async request => {
     const supplied = (inputDeviceInfo: unknown) => inputDeviceInfo && typeof inputDeviceInfo === 'object' ? inputDeviceInfo as Record<string, unknown> : {}
     const clientDevice = supplied(currentDeviceInfo)
     const allowedTypes = ['Desktop','Laptop','Tablet','Mobile','Unknown']
+    const clientName = clientDevice.device_name ?? clientDevice.deviceName
+    const cleanUa = typeof clientDevice.user_agent === 'string' ? clientDevice.user_agent.slice(0, 1024) : typeof clientDevice.userAgent === 'string' ? clientDevice.userAgent.slice(0, 1024) : ua.slice(0, 1024)
     const device = {
       ...parsedUa,
-      deviceType: allowedTypes.includes(String(clientDevice.deviceType)) ? String(clientDevice.deviceType) : parsedUa.deviceType,
-      operatingSystem: safeLabel(clientDevice.operatingSystem, parsedUa.operatingSystem),
-      operatingSystemVersion: safeLabel(clientDevice.operatingSystemVersion, parsedUa.operatingSystemVersion),
+      deviceType: allowedTypes.includes(String(clientDevice.device_category ?? clientDevice.deviceType)) ? String(clientDevice.device_category ?? clientDevice.deviceType) : parsedUa.deviceType,
+      operatingSystem: safeLabel(clientDevice.operating_system ?? clientDevice.operatingSystem, parsedUa.operatingSystem),
+      operatingSystemVersion: safeLabel(clientDevice.operating_system_version ?? clientDevice.operatingSystemVersion, parsedUa.operatingSystemVersion),
       browser: safeLabel(clientDevice.browser, parsedUa.browser),
-      browserVersion: safeLabel(clientDevice.browserVersion, parsedUa.browserVersion),
-      deviceModel: safeLabel(clientDevice.deviceModel, ''),
-      screenCategory: allowedTypes.includes(String(clientDevice.screenCategory)) ? String(clientDevice.screenCategory) : parsedUa.screenCategory,
+      browserVersion: safeLabel(clientDevice.browser_version ?? clientDevice.browserVersion, parsedUa.browserVersion),
+      deviceModel: safeLabel(clientDevice.device_model ?? clientDevice.deviceModel, ''),
+      screenCategory: allowedTypes.includes(String(clientDevice.device_category ?? clientDevice.screenCategory)) ? String(clientDevice.device_category ?? clientDevice.screenCategory) : parsedUa.screenCategory,
+      deviceName: safeLabel(clientName, `${safeLabel(clientDevice.device_category ?? clientDevice.deviceType, parsedUa.deviceType)} · ${safeLabel(clientDevice.operating_system ?? clientDevice.operatingSystem, parsedUa.operatingSystem)} · ${safeLabel(clientDevice.browser, parsedUa.browser)}`),
+      userAgent: cleanUa,
     }
     const trustedIp = request.headers.get('cf-connecting-ip')?.trim() ?? ''
     const ipAddress = /^[0-9a-f:.]+$/i.test(trustedIp) ? trustedIp : ''
@@ -129,7 +133,18 @@ Deno.serve(async request => {
     })
     const activity = Array.isArray(activityRows) ? activityRows[0] : null
     if (activityError || !activity?.activity_id) return { error: activityError ?? new Error('Login activity was not recorded.') }
-    await admin.from('user_devices').update({ operating_system_version: device.operatingSystemVersion || null, device_model: device.deviceModel || null, screen_category: device.screenCategory }).eq('id', activity.device_id)
+    const { error: deviceMetadataError } = await admin.from('user_devices').update({
+      device_name: device.deviceName.slice(0, 120), device_type: device.deviceType,
+      operating_system: device.operatingSystem, operating_system_version: device.operatingSystemVersion || null,
+      device_model: device.deviceModel || null, screen_category: device.screenCategory,
+      browser: device.browser, browser_version: device.browserVersion || null,
+    }).eq('id', activity.device_id)
+    const { error: activityMetadataError } = await admin.from('login_activity').update({ user_agent: device.userAgent || null }).eq('id', activity.activity_id)
+    if (deviceMetadataError || activityMetadataError) {
+      const error = deviceMetadataError ?? activityMetadataError
+      console.error('Login device metadata could not be saved', { code: error.code ?? 'unknown' })
+      return { error }
+    }
 
     if (activity.is_new_device === true) {
       const title = 'New device signed in to CampuSync'
