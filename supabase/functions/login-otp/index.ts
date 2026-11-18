@@ -152,7 +152,7 @@ Deno.serve(async request => {
     if (!(await rate(`start:${email}`, 900, 5)) || !(await rate('start-ip', 900, 20))) { await logEvent('rate_limit_triggered', null, email, { action: 'start' }); return respond(origin, { error: 'Too many sign-in attempts. Please wait a few minutes and try again.' }, 429) }
     const auth = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } })
     const { data, error: signInError } = await auth.auth.signInWithPassword({ email, password })
-    const firstTime = signInError?.code === 'email_not_confirmed'
+    let firstTime = signInError?.code === 'email_not_confirmed'
     if (signInError?.code === 'user_banned') {
       await logEvent('account_access_denied', null, email, { reason: 'suspended' })
       return respond(origin, { error: 'This account is suspended. Please contact your school administrator.' }, 403)
@@ -168,11 +168,28 @@ Deno.serve(async request => {
       const { data: candidate, error: candidateError } = await admin.from('profiles').select('auth_user_id').eq('email', email).maybeSingle()
       if (candidateError || !candidate?.auth_user_id) { await logEvent('account_access_denied', null, email, { reason: 'profile_not_found' }); return respond(origin, { error: genericFailure }, 401) }
       const { data: authRecord, error: authRecordError } = await admin.auth.admin.getUserById(candidate.auth_user_id)
-      if (authRecordError || !authRecord.user || authRecord.user.email?.toLowerCase() !== email || authRecord.user.email_confirmed_at) { await logEvent('failed_login', candidate.auth_user_id, email, { reason: 'unconfirmed_account_lookup_failed' }); return respond(origin, { error: genericFailure }, 401) }
+      if (authRecordError || !authRecord.user || authRecord.user.email?.toLowerCase() !== email) { await logEvent('failed_login', candidate.auth_user_id, email, { reason: 'unconfirmed_account_lookup_failed' }); return respond(origin, { error: genericFailure }, 401) }
       authUserId = authRecord.user.id
       registeredEmail = authRecord.user.email
-      authEmailVerifiedAt = null
+      authEmailVerifiedAt = authRecord.user.email_confirmed_at ?? null
       session = null
+      if (!authEmailVerifiedAt) {
+        // A successful OTP from the previous flow may already be recorded even
+        // if Supabase Auth's email flag was not updated. Reconcile that trusted
+        // server-side verification once, then sign in with the supplied password.
+        const { data: priorVerification, error: priorVerificationError } = await admin.from('school_email_verifications')
+          .select('verified_at').eq('auth_user_id', authUserId).maybeSingle()
+        if (priorVerificationError) return respond(origin, { error: 'Login verification is not configured. Please contact your school administrator.' }, 503)
+        if (priorVerification?.verified_at) {
+          const { error: confirmError } = await admin.auth.admin.updateUserById(authUserId, { email_confirm: true })
+          if (confirmError) return respond(origin, { error: 'Your previously verified email could not be restored. Please try again.' }, 503)
+          const retried = await auth.auth.signInWithPassword({ email, password })
+          if (retried.error || !retried.data.session) return respond(origin, { error: genericFailure }, 401)
+          session = retried.data.session
+          authEmailVerifiedAt = authRecord.user.email_confirmed_at ?? priorVerification.verified_at
+          firstTime = false
+        }
+      }
     }
     if (!authUserId || !registeredEmail || (!firstTime && !session)) { await logEvent('failed_login', authUserId || null, email); return respond(origin, { error: genericFailure }, 401) }
     await logEvent('password_validated', authUserId, registeredEmail, { verification_kind: firstTime ? 'FIRST_TIME' : 'LOGIN' })
@@ -294,6 +311,10 @@ Deno.serve(async request => {
       await logEvent(result?.result === 'expired' ? 'otp_expiration' : 'otp_verification_failure', challengeOwner?.auth_user_id ?? null, challengeOwner?.email ?? '', { result: result?.result ?? 'invalid' })
       await logEvent('failed_login', challengeOwner?.auth_user_id ?? null, challengeOwner?.email ?? '', { reason: 'otp_verification_failed' })
       return respond(origin, { error: message }, 400)
+    }
+    if (result.verification_kind !== 'FIRST_TIME') {
+      await logEvent('otp_verification_failure', result.auth_user_id, result.email, { reason: 'repeat_login_verification_disabled' })
+      return respond(origin, { error: 'This email is already verified. Return to sign in and use your email and password.' }, 409)
     }
     await logEvent('otp_verification_success', result.auth_user_id, result.email, { verification_kind: result.verification_kind })
     let tokens: { access_token: string; refresh_token: string }

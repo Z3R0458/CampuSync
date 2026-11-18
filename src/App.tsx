@@ -232,7 +232,7 @@ function LoginScreen() {
     <main className="login-page min-h-screen lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
       <section className="login-campus relative flex min-h-[260px] flex-col justify-between overflow-hidden px-6 py-7 text-white sm:min-h-[340px] sm:px-10 sm:py-9 lg:min-h-screen lg:px-14 lg:py-12 xl:px-20">
         <img src="/valencia-nhs-campus.jpg" alt="Valencia National High School campus sign and grounds" className="absolute inset-0 h-full w-full object-cover" />
-        <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(5,35,28,.82)_0%,rgba(13,69,48,.58)_48%,rgba(10,45,42,.18)_100%)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(6,30,69,.84)_0%,rgba(8,70,128,.62)_48%,rgba(10,82,92,.24)_100%)]" />
         <div className="relative z-10 flex items-center gap-3">
           <span className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-white/95 shadow-lg backdrop-blur"><img src="/campusync-logo.png" alt="CampuSync" className="h-full w-full object-contain" /></span>
           <span><span className="block font-[var(--font-display)] text-lg font-extrabold tracking-tight">CampuSync</span><span className="block text-xs text-white/75">Valencia NHS portal</span></span>
@@ -495,9 +495,9 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
   }, [])
 
   return (
-        <div className="min-h-screen bg-[radial-gradient(ellipse_at_top_left,_rgba(220,243,232,.65),_transparent_38%),linear-gradient(180deg,#f7faf9_0%,#f1f5f4_100%)] text-[var(--color-main-text)]">
+        <div className="dashboard-shell min-h-screen text-[var(--color-main-text)]">
           <div className="mx-auto flex max-w-[1680px] gap-5 p-3 sm:p-5 xl:gap-7 xl:p-7">
-            <aside className="sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 flex-col rounded-[26px] border border-white bg-white/90 p-5 shadow-[0_16px_45px_rgba(36,59,83,0.07)] backdrop-blur md:flex">
+            <aside className="dashboard-sidebar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 flex-col rounded-[26px] border bg-white/90 p-5 backdrop-blur md:flex">
               <div className="mb-8 flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-white">
                   <img src="/campusync-logo.png" alt="CampuSync" className="h-full w-full object-contain" />
@@ -526,7 +526,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                     to={path}
                     end={id === 'dashboard' || id === 'student-home' || id === 'parent-home'}
                     className={({ isActive }) =>
-                      `flex items-center justify-between rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
+                      `cs-nav-link flex items-center justify-between rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
                         isActive
                           ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)] shadow-sm ring-1 ring-[var(--color-brand-green)]/30'
                           : 'text-[var(--color-secondary-text)] hover:bg-slate-50'
@@ -554,7 +554,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
             </aside>
 
             <main className="min-w-0 flex-1">
-              <header className="mb-5 flex flex-col gap-4 rounded-[26px] border border-white bg-white/90 p-4 shadow-[0_12px_40px_rgba(36,59,83,0.05)] backdrop-blur sm:p-5 md:flex-row md:items-center md:justify-between">
+              <header className="dashboard-topbar mb-5 flex flex-col gap-4 rounded-[26px] border bg-white/90 p-4 backdrop-blur sm:p-5 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--color-secondary-text)]">Operations hub</p>
                   <h1 className="mt-1 font-[var(--font-display)] text-2xl font-extrabold tracking-tight md:text-3xl">
@@ -588,6 +588,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                 ))}
               </nav>
 
+              <div className="dashboard-content">
               <Routes>
                 <Route path="/" element={<Navigate to={`/${profile.role}`} replace />} />
                 <Route path="/administrator/security" element={<RoleRoute profile={profile} role="administrator"><DashboardShell title="Security Monitoring" subtitle="Review account sign-ins and security events"><AdminLoginMonitoring /></DashboardShell></RoleRoute>} />
@@ -604,6 +605,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                 <Route path="/parent/*" element={<RoleRoute profile={profile} role="parent"><ParentPortal profile={profile} /></RoleRoute>} />
                 <Route path="*" element={<Navigate to={`/${profile.role}`} replace />} />
               </Routes>
+              </div>
             </main>
           </div>
         </div>
@@ -612,7 +614,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
 
 function DashboardShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
   return (
-    <div className="space-y-6">
+    <div className="cs-page-enter space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--color-brand-dark)]">School operations</p>
@@ -634,7 +636,7 @@ function KpiCard({ label, value, trend, accent = 'green' }: { label: string; val
   }
 
   return (
-    <div className="rounded-[24px] border border-[var(--color-border)] bg-white p-4 shadow-sm">
+    <div className="cs-card rounded-[24px] border border-[var(--color-border)] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-sm text-[var(--color-secondary-text)]">{label}</p>
         <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${accentMap[accent]}`}>
