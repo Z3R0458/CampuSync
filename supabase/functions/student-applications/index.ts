@@ -165,7 +165,9 @@ Deno.serve(async request => {
   if (dupeStudent) return reply({ error: 'That student number is already assigned.' }, 409)
   const { data: dupeEmail } = await admin.from('profiles').select('id').eq('email', application.email).maybeSingle()
   if (dupeEmail) return reply({ error: 'An account already exists for this email.' }, 409)
-  const secret = Array.from(crypto.getRandomValues(new Uint8Array(40)), b => b.toString(16).padStart(2, '0')).join('')
+  // Supabase Auth uses bcrypt, which only accepts passwords up to 72 bytes.
+  // A 32-byte random value encoded as hex is 64 ASCII characters.
+  const secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
   const fullName = [application.first_name, application.middle_name, application.last_name, application.suffix].filter(Boolean).join(' ')
   const { data: created, error: createError } = await admin.auth.admin.createUser({ email: application.email, password: secret, email_confirm: true, user_metadata: { full_name: fullName } })
   if (createError || !created.user) return reply({ error: createError?.message ?? 'Could not create the account.' }, 400)
