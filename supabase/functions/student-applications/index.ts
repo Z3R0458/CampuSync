@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { escapeEmailHtml, sendSchoolEmail } from '../_shared/email.ts'
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' }
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
@@ -143,10 +144,12 @@ Deno.serve(async request => {
   const publicUrl = Deno.env.get('APP_PUBLIC_URL')
   const { data: recovery, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: application.email, ...(publicUrl ? { options: { redirectTo: publicUrl } } : {}) })
   let emailSent = false
-  const resendKey = Deno.env.get('RESEND_API_KEY'), sender = Deno.env.get('SCHOOL_EMAIL_FROM')
-  if (!linkError && recovery.properties?.action_link && resendKey && sender) {
-    const mail = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: sender, to: [application.email], subject: 'Your CampuSync student account is ready', html: `<p>Hello ${escapeHtml(fullName)},</p><p>Your student account has been approved. Use the secure link below to set your password. You will then sign in with the school's email verification code.</p><p><a href="${recovery.properties.action_link}">Set your password</a></p><p>Student number: ${escapeHtml(studentNumber)}</p>` }) })
-    emailSent = mail.ok
+  if (!linkError && recovery.properties?.action_link) {
+    try {
+      const safeActionLink = escapeEmailHtml(recovery.properties.action_link)
+      await sendSchoolEmail({ to: application.email, subject: 'Your CampuSync student account is ready', preheader: 'Your student account is ready. Set your password to get started.', text: `Hello ${fullName},\n\nYour student account has been approved. Set your password using the secure link in this email.\n\nStudent number: ${studentNumber}`, html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your student account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${escapeHtml(fullName)},</p><p style="margin:0 0 22px;color:#475569;font-size:15px;line-height:1.7">Your student application has been approved. Set a password to activate your account, then sign in with your school email and verification code.</p><p style="margin:0 0 22px"><a href="${safeActionLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Set my password</a></p><div style="padding:14px 16px;border:1px solid #e2ebe6;border-radius:12px;background:#f8fbf9;color:#475569;font-size:14px;line-height:1.7"><b style="color:#16332a">Student number:</b> ${escapeHtml(studentNumber)}</div><p style="margin:18px 0 0;color:#64756e;font-size:13px;line-height:1.6">If you were not expecting this message, contact your school administrator.</p>` })
+      emailSent = true
+    } catch { emailSent = false }
   }
   await admin.from('audit_logs').insert({ actor_id: actor.id, actor_name_snapshot: actor.full_name, actor_email_snapshot: actor.email, actor_role_snapshot: 'administrator', entity_type: 'student_applications', entity_id: appId, entity_label: application.reference_code, action: 'student_activation_email_delivery', module: 'enrollment', description: emailSent ? 'Student activation email sent' : 'Student activation email delivery failed or is not configured', new_values: { email_sent: emailSent }, changed_fields: ['email_sent'], status: emailSent ? 'success' : 'failed', details: {} })
   return reply({ success: true, student: approved, emailSent, emailNotice: emailSent ? null : 'Account was created, but activation email delivery did not complete. Use User Accounts to send a password reset link.' }, 201)

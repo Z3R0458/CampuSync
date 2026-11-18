@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3.6.7'
+import { escapeEmailHtml, sendSchoolEmail } from '../_shared/email.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,8 +22,6 @@ Deno.serve(async (request) => {
   const vapidPublicKey = Deno.env.get('VAPID_PUBLIC_KEY')
   const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY')
   const vapidSubject = Deno.env.get('VAPID_SUBJECT') ?? 'mailto:school-admin@example.edu'
-  const resendApiKey = Deno.env.get('RESEND_API_KEY')
-  const emailFrom = Deno.env.get('SCHOOL_EMAIL_FROM')
   if (!url || !serviceKey || !anonKey || !vapidPublicKey || !vapidPrivateKey) return respond({ error: 'Push function secrets are not configured.' }, 500)
 
   const authHeader = request.headers.get('Authorization')
@@ -99,7 +98,7 @@ Deno.serve(async (request) => {
         if(delivery?.id)await admin.from('parent_notification_delivery_attempts').update({status:'FAILED',last_error:String(error),updated_at:new Date().toISOString()}).eq('id',delivery.id)
       }
     }
-    if (resendApiKey && emailFrom && noticePayload.category && actor.is_active) {
+    if (noticePayload.category && actor.is_active) {
       const { data: recipient } = await admin.from('profiles').select('email,role').eq('id',notice.recipient_id).maybeSingle()
       if(recipient?.role==='parent'&&recipient.email){
         const { data: parent } = await admin.from('parents').select('id,parent_notification_preferences(email_enabled)').eq('profile_id',notice.recipient_id).maybeSingle()
@@ -110,8 +109,9 @@ Deno.serve(async (request) => {
             const attempts=(prior?.attempts??0)+1
             const { data: delivery }=await admin.from('parent_notification_delivery_attempts').upsert({notification_id:notice.id,recipient_id:notice.recipient_id,channel:'email',delivery_key:'account',status:'PENDING',attempts,last_error:null,updated_at:new Date().toISOString()},{onConflict:'notification_id,recipient_id,channel,delivery_key'}).select('id').single()
             try{
-              const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${resendApiKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:emailFrom,to:[recipient.email],subject:String(noticePayload.title??'CampuSync update'),text:String(noticePayload.message??notice.type)})})
-              if(!response.ok)throw new Error(`Email provider returned ${response.status}: ${await response.text()}`)
+              const title=String(noticePayload.title??'CampuSync update')
+              const message=String(noticePayload.message??notice.type)
+              await sendSchoolEmail({to:recipient.email,subject:title,preheader:title,text:message,html:`<h1 style="margin:4px 0 12px;color:#16332a;font-size:23px;line-height:1.35">${escapeEmailHtml(title)}</h1><p style="margin:0;color:#475569;font-size:15px;line-height:1.75;white-space:pre-line">${escapeEmailHtml(message)}</p>`})
               if(delivery?.id)await admin.from('parent_notification_delivery_attempts').update({status:'SENT',sent_at:new Date().toISOString(),last_error:null,updated_at:new Date().toISOString()}).eq('id',delivery.id)
             }catch(error){if(delivery?.id)await admin.from('parent_notification_delivery_attempts').update({status:'FAILED',last_error:String(error),updated_at:new Date().toISOString()}).eq('id',delivery.id)}
           }

@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { sendSchoolEmail } from '../_shared/email.ts'
 
 const origins = (Deno.env.get('SCHOOLGUARD_ALLOWED_ORIGINS') ?? '').split(',').map(value => value.trim()).filter(Boolean)
 const genericFailure = 'Sign-in could not be completed. Check your credentials and try again.'
@@ -55,11 +56,9 @@ Deno.serve(async request => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   const hmacSecret = Deno.env.get('OTP_HMAC_SECRET')
   const encryptionKey = Deno.env.get('OTP_SESSION_ENCRYPTION_KEY')
-  const resendKey = Deno.env.get('RESEND_API_KEY')
-  const emailFrom = Deno.env.get('SCHOOL_EMAIL_FROM')
   let encryptionKeyBytes: Uint8Array
   try { encryptionKeyBytes = encryptionKey ? unb64(encryptionKey) : new Uint8Array() } catch { return respond(origin, { error: 'Login verification is not configured.' }, 503) }
-  if (!url || !anonKey || !serviceKey || !hmacSecret || new TextEncoder().encode(hmacSecret).length < 32 || !encryptionKey || encryptionKeyBytes.length !== 32 || !resendKey || !emailFrom) return respond(origin, { error: 'Login verification is not configured.' }, 503)
+  if (!url || !anonKey || !serviceKey || !hmacSecret || new TextEncoder().encode(hmacSecret).length < 32 || !encryptionKey || encryptionKeyBytes.length !== 32) return respond(origin, { error: 'Login verification is not configured.' }, 503)
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } })
   const db = admin.schema('public')
@@ -139,8 +138,13 @@ Deno.serve(async request => {
     const emailSubject = verificationKind === 'FIRST_TIME' ? 'Verify your CampuSync email' : 'Your CampuSync sign-in code'
     const emailMessage = verificationKind === 'FIRST_TIME' ? 'Use this code to verify your email and finish setting up access to CampuSync.' : 'Use this code to finish signing in to CampuSync.'
     const emailBody = `${emailMessage}\n\nYour code: ${code}\n\nThis code expires in 5 minutes. Never share this code with anyone. If you did not try to sign in, you can ignore this email.`
-    const sent = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: emailFrom, to: [registeredEmail], subject: emailSubject, text: emailBody, html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px;color:#16332a"><div style="font-size:22px;font-weight:700;color:#16794f">CampuSync</div><h1 style="font-size:20px">${emailSubject}</h1><p>${emailMessage}</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;background:#f2f7f4;padding:18px;text-align:center">${code}</p><p>This code expires in 5 minutes. Never share it with anyone.</p><p style="color:#64746c;font-size:13px">If you did not try to sign in, you can ignore this email.</p></div>` }) })
-    if (!sent.ok) { await db.from('login_otp_challenges').delete().eq('id', challengeId); await logEvent('otp_delivery_failed', authUserId, registeredEmail, { verification_kind: verificationKind }); return respond(origin, { error: genericFailure }, 503) }
+    try {
+      await sendSchoolEmail({ to: registeredEmail, subject: emailSubject, preheader: 'Your secure CampuSync verification code is inside.', text: emailBody, html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">${emailSubject}</h1><p style="margin:0 0 20px;color:#475569;font-size:15px;line-height:1.7">${emailMessage}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px;background:#f0f8f4;border:1px solid #d8ede1;border-radius:14px"><tr><td align="center" style="padding:22px 12px"><div style="margin-bottom:8px;color:#557064;font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">Your one-time code</div><div style="color:#087a53;font-size:34px;font-weight:700;letter-spacing:9px">${code}</div></td></tr></table><p style="margin:0 0 10px;color:#475569;font-size:14px;line-height:1.7">This code expires in <b>5 minutes</b>. Enter it in the CampuSync sign-in screen.</p><p style="margin:0;color:#64756e;font-size:13px;line-height:1.6">Never share this code. If you did not request it, you can ignore this email.</p>` })
+    } catch {
+      await db.from('login_otp_challenges').delete().eq('id', challengeId)
+      await logEvent('otp_delivery_failed', authUserId, registeredEmail, { verification_kind: verificationKind })
+      return respond(origin, { error: genericFailure }, 503)
+    }
     await logEvent('otp_sent', authUserId, registeredEmail, { verification_kind: verificationKind })
     return respond(origin, { challengeId, verificationKind, maskedEmail: maskEmail(registeredEmail), expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), resendAt: new Date(Date.now() + 60_000).toISOString() })
   }
@@ -160,9 +164,9 @@ Deno.serve(async request => {
     const subject = kind === 'FIRST_TIME' ? 'Verify your CampuSync email' : 'Your CampuSync sign-in code'
     const purpose = kind === 'FIRST_TIME' ? 'verify your email and finish setting up access' : 'finish signing in'
     const body = `Use this code to ${purpose}: ${code}. It expires in 5 minutes. Never share this code. The previous code is no longer valid.`
-    const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px;color:#16332a"><div style="font-size:22px;font-weight:700;color:#16794f">CampuSync</div><h1 style="font-size:20px">${subject}</h1><p>Use this code to ${purpose}:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;background:#f2f7f4;padding:18px;text-align:center">${code}</p><p>This code expires in 5 minutes. Never share it with anyone. The previous code is no longer valid.</p></div>`
-    const sent = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: emailFrom, to: [email], subject, text: body, html }) })
-    if (!sent.ok) { await logEvent('otp_delivery_failed', null, email, { action: 'resend' }); return respond(origin, { error: genericFailure }, 503) }
+    const html = `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">${subject}</h1><p style="margin:0 0 20px;color:#475569;font-size:15px;line-height:1.7">Use this code to ${purpose}:</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px;background:#f0f8f4;border:1px solid #d8ede1;border-radius:14px"><tr><td align="center" style="padding:22px 12px"><div style="margin-bottom:8px;color:#557064;font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">Your one-time code</div><div style="color:#087a53;font-size:34px;font-weight:700;letter-spacing:9px">${code}</div></td></tr></table><p style="margin:0;color:#64756e;font-size:13px;line-height:1.6">This code expires in 5 minutes. Never share it. Your previous code is no longer valid.</p>`
+    try { await sendSchoolEmail({ to: email, subject, preheader: 'Your new secure CampuSync code is inside.', text: body, html }) }
+    catch { await logEvent('otp_delivery_failed', null, email, { action: 'resend' }); return respond(origin, { error: genericFailure }, 503) }
     await logEvent('otp_resend', null, email, { verification_kind: kind })
     await logEvent('otp_sent', null, email, { verification_kind: kind, resend: true })
     return respond(origin, { challengeId, verificationKind: kind, maskedEmail: maskEmail(email), expiresAt, resendAt })
