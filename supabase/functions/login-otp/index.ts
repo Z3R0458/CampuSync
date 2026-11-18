@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { sendSchoolEmail } from '../_shared/email.ts'
+import { escapeEmailHtml, sendSchoolEmail } from '../_shared/email.ts'
 
 const origins = (Deno.env.get('SCHOOLGUARD_ALLOWED_ORIGINS') ?? '').split(',').map(value => value.trim()).filter(Boolean)
 const genericFailure = 'Sign-in could not be completed. Check your credentials and try again.'
@@ -46,6 +46,24 @@ async function makeCode() {
     if (integer < range) return String(integer % 1_000_000).padStart(6, '0')
   }
 }
+function parseDevice(userAgent: string) {
+  const deviceType = /ipad|tablet|playbook|silk/i.test(userAgent) ? 'Tablet' : /mobile|iphone|ipod|android.*mobile/i.test(userAgent) ? 'Mobile' : 'Desktop'
+  const operatingSystem = /Windows NT/i.test(userAgent) ? 'Windows'
+    : /Android/i.test(userAgent) ? 'Android'
+    : /iPhone|iPad|iPod/i.test(userAgent) ? 'iOS'
+    : /Mac OS X/i.test(userAgent) ? 'macOS'
+    : /Linux/i.test(userAgent) ? 'Linux' : 'Unknown'
+  const browserMatch = userAgent.match(/Edg\/([\d.]+)/) ? ['Edge', userAgent.match(/Edg\/([\d.]+)/)![1]]
+    : userAgent.match(/OPR\/([\d.]+)/) ? ['Opera', userAgent.match(/OPR\/([\d.]+)/)![1]]
+    : userAgent.match(/Firefox\/([\d.]+)/) ? ['Firefox', userAgent.match(/Firefox\/([\d.]+)/)![1]]
+    : userAgent.match(/Chrome\/([\d.]+)/) ? ['Chrome', userAgent.match(/Chrome\/([\d.]+)/)![1]]
+    : userAgent.match(/Version\/([\d.]+).*Safari/) ? ['Safari', userAgent.match(/Version\/([\d.]+).*Safari/)![1]]
+    : ['Unknown', '']
+  return { deviceType, operatingSystem, browser: browserMatch[0], browserVersion: browserMatch[1] }
+}
+function safeDeviceIdentifier(value: unknown) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(value) ? value : crypto.randomUUID()
+}
 
 Deno.serve(async request => {
   const origin = request.headers.get('Origin')
@@ -76,6 +94,51 @@ Deno.serve(async request => {
         ip_hmac: await hmac(hmacSecret, `audit-ip:${ip}`), details,
       })
     } catch { /* Audit insertion is best-effort and never changes authentication results. */ }
+  }
+  const recordSuccessfulLogin = async (authUserId: string, email: string, sessionId: string, deviceIdentifier: string) => {
+    const ua = request.headers.get('user-agent') ?? ''
+    const device = parseDevice(ua)
+    const trustedIp = request.headers.get('cf-connecting-ip')?.trim() ?? ''
+    const ipAddress = /^[0-9a-f:.]+$/i.test(trustedIp) ? trustedIp : ''
+    const { data: activityRows, error: activityError } = await db.rpc('record_login_activity', {
+      p_auth_user_id: authUserId, p_session_id: sessionId, p_device_identifier: deviceIdentifier,
+      p_device_type: device.deviceType, p_operating_system: device.operatingSystem,
+      p_browser: device.browser, p_browser_version: device.browserVersion, p_ip_address: ipAddress,
+    })
+    const activity = Array.isArray(activityRows) ? activityRows[0] : null
+    if (activityError || !activity?.activity_id) return { error: activityError ?? new Error('Login activity was not recorded.') }
+
+    if (activity.is_new_device === true) {
+      const title = 'New device signed in to CampuSync'
+      const description = `A new ${device.deviceType.toLowerCase()} using ${device.operatingSystem} and ${device.browser}${device.browserVersion ? ` ${device.browserVersion}` : ''} signed in to your account.`
+      const { data: existingNotice } = await admin.from('notifications').select('id').eq('recipient_id', activity.profile_id)
+        .eq('type', 'security_new_device').contains('payload', { activity_id: activity.activity_id }).maybeSingle()
+      if (!existingNotice) {
+        await admin.from('notifications').insert({
+          recipient_id: activity.profile_id, actor_id: activity.profile_id, type: 'security_new_device',
+          payload: { title, message: description, category: 'security', activity_id: activity.activity_id, device_type: device.deviceType, operating_system: device.operatingSystem, browser: device.browser, browser_version: device.browserVersion || null, ip_address: ipAddress || null, login_at: new Date().toISOString(), security_path: `/${activity.user_role}/security` },
+        })
+      }
+      if (activity.email_delivery_status !== 'SENT') {
+        let delivered = false
+        for (let attempt = 0; attempt < 2 && !delivered; attempt++) {
+          try {
+            const appUrl = (Deno.env.get('APP_PUBLIC_URL') ?? '').replace(/\/$/, '')
+            const link = `${appUrl}/${activity.user_role}/security`
+            const ipLine = ipAddress ? `IP address: ${ipAddress}` : 'IP address: not available'
+            await sendSchoolEmail({
+              to: email, subject: title, preheader: 'A new device accessed your CampuSync account.',
+              text: `${description}\nLocation: not available\n${ipLine}\nTime: ${new Date().toISOString()} (UTC)\n\nIf you do not recognize this activity, change your password and review Security & Login Activity: ${link}`,
+              html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px">New device sign-in</h1><p style="margin:0 0 18px;color:#475569;font-size:15px;line-height:1.7">We noticed a new device accessing your CampuSync account.</p><div style="padding:16px;border:1px solid #dce9e1;border-radius:12px;background:#f6faf8;color:#334155;font-size:14px;line-height:1.8"><b>Device:</b> ${escapeEmailHtml(device.deviceType)}<br><b>System:</b> ${escapeEmailHtml(device.operatingSystem)}<br><b>Browser:</b> ${escapeEmailHtml(device.browser)} ${escapeEmailHtml(device.browserVersion)}<br><b>Location:</b> Not available<br><b>IP address:</b> ${escapeEmailHtml(ipAddress || 'Not available')}<br><b>Time:</b> ${escapeEmailHtml(new Date().toISOString())} UTC</div><p style="margin:18px 0;color:#475569;font-size:14px;line-height:1.7">If you do not recognize this sign-in, change your password and review your recent activity.</p><p><a href="${escapeEmailHtml(link)}" style="display:inline-block;padding:12px 20px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-weight:700">Review login activity</a></p>`,
+            })
+            delivered = true
+          } catch { /* A security alert failure must not invalidate a real login. */ }
+        }
+        await admin.from('login_activity').update({ email_delivery_status: delivered ? 'SENT' : 'FAILED', email_delivery_attempts: delivered ? 1 : 2, email_last_error: delivered ? null : 'SMTP delivery failed after retry.' }).eq('id', activity.activity_id)
+      }
+    }
+    await logEvent('successful_login', authUserId, email, { activity_id: activity.activity_id, new_device: activity.is_new_device === true })
+    return { activity, error: null }
   }
   let input: Record<string, unknown>
   try { input = await request.json() as Record<string, unknown> } catch { return respond(origin, { error: genericFailure }, 400) }
@@ -121,6 +184,35 @@ Deno.serve(async request => {
     const verificationKind = firstTime || (!verification?.verified_at && !authEmailVerifiedAt) ? 'FIRST_TIME' : 'LOGIN'
     const sessionId = session ? String(jwtClaims(session.access_token).session_id ?? '') : crypto.randomUUID()
     if (!sessionId) return respond(origin, { error: genericFailure }, 401)
+
+    // Email verification is a one-time gate. Existing accounts whose email is
+    // already confirmed receive a normal session without another OTP.
+    if (verificationKind === 'LOGIN' && session) {
+      if (authEmailVerifiedAt && !verification?.verified_at) {
+        await admin.from('school_email_verifications').upsert({ auth_user_id: authUserId, verified_at: authEmailVerifiedAt }, { onConflict: 'auth_user_id' })
+      }
+      await db.from('login_otp_challenges').update({ consumed_at: new Date().toISOString(), encrypted_session: '' }).eq('auth_user_id', authUserId).is('consumed_at', null)
+      const { error: sessionWriteError } = await admin.from('login_otp_verified_sessions').upsert({
+        session_id: sessionId, auth_user_id: authUserId,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(), revoked_at: null,
+      }, { onConflict: 'session_id' })
+      if (sessionWriteError) return respond(origin, { error: 'Your verified session could not be prepared. Please try again.' }, 503)
+      const deviceIdentifier = safeDeviceIdentifier(input.deviceIdentifier)
+      const tracked = await recordSuccessfulLogin(authUserId, registeredEmail, sessionId, deviceIdentifier)
+      if (tracked.error) {
+        await admin.from('login_otp_verified_sessions').update({ revoked_at: new Date().toISOString() }).eq('session_id', sessionId)
+        console.error('Successful login activity could not be recorded', { code: (tracked.error as { code?: string }).code ?? 'unknown' })
+        return respond(origin, { error: 'Sign-in could not be completed because security activity could not be recorded. Please try again.' }, 503)
+      }
+      const refreshed = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, { method: 'POST', headers: { apikey: anonKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: session.refresh_token }) })
+      if (!refreshed.ok) {
+        await admin.from('login_otp_verified_sessions').update({ revoked_at: new Date().toISOString() }).eq('session_id', sessionId)
+        return respond(origin, { error: 'Your sign-in expired. Please enter your credentials again.' }, 401)
+      }
+      const issued = await refreshed.json()
+      return respond(origin, { access_token: issued.access_token, refresh_token: issued.refresh_token, token_type: issued.token_type, expires_in: issued.expires_in, verified: true })
+    }
+
     await db.from('login_otp_challenges').delete().lt('expires_at', new Date().toISOString())
     const { error: invalidateError } = await db.from('login_otp_challenges').update({ consumed_at: new Date().toISOString(), encrypted_session: '' }).eq('auth_user_id', authUserId).is('consumed_at', null)
     if (invalidateError) return respond(origin, { error: genericFailure }, 503)
@@ -161,6 +253,12 @@ Deno.serve(async request => {
     if (!resendChallenge?.email) return respond(origin, { error: 'Please wait before requesting another code.' }, 429)
     const email = String(resendChallenge.email)
     const kind = resendChallenge.verification_kind === 'FIRST_TIME' ? 'FIRST_TIME' : 'LOGIN'
+    // Legacy LOGIN challenges from before one-time verification may still be
+    // present after deployment. Consume them instead of sending another OTP.
+    if (kind !== 'FIRST_TIME') {
+      await db.from('login_otp_challenges').update({ consumed_at: new Date().toISOString(), encrypted_session: '' }).eq('id', challengeId)
+      return respond(origin, { error: 'Email verification is complete for this account. Return to sign in with your email and password.' }, 409)
+    }
     const subject = kind === 'FIRST_TIME' ? 'Verify your CampuSync email' : 'Your CampuSync sign-in code'
     const purpose = kind === 'FIRST_TIME' ? 'verify your email and finish setting up access' : 'finish signing in'
     const body = `Use this code to ${purpose}: ${code}. It expires in 5 minutes. Never share this code. The previous code is no longer valid.`
@@ -247,7 +345,13 @@ Deno.serve(async request => {
       return respond(origin, { error: 'Your sign-in expired. Please enter your credentials again.' }, 401)
     }
     const session = await refreshed.json()
-    await logEvent('successful_login', result.auth_user_id, result.email)
+    const deviceIdentifier = safeDeviceIdentifier(input.deviceIdentifier)
+    const tracked = await recordSuccessfulLogin(result.auth_user_id, result.email, issuedSessionId, deviceIdentifier)
+    if (tracked.error) {
+      await admin.from('login_otp_verified_sessions').update({ revoked_at: new Date().toISOString() }).eq('session_id', issuedSessionId)
+      console.error('Verified login activity could not be recorded', { code: (tracked.error as { code?: string }).code ?? 'unknown' })
+      return respond(origin, { error: 'Email verified, but security activity could not be recorded. Please sign in again.' }, 503)
+    }
     return respond(origin, { access_token: session.access_token, refresh_token: session.refresh_token, token_type: session.token_type, expires_in: session.expires_in })
   }
   return respond(origin, { error: genericFailure }, 400)

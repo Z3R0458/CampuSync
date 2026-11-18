@@ -25,6 +25,7 @@ import {
   LogOut,
   QrCode,
   ShieldCheck,
+  Shield,
   UserCog,
   Users,
   Wifi,
@@ -54,6 +55,7 @@ import { StudentRegistration } from './student/StudentRegistration'
 import { StudentApplications } from './admin/StudentApplications'
 import { GuardEarlyOutApprovals } from './guard/GuardEarlyOutApprovals'
 import { FeedbackProvider, friendlyError, useFeedback } from './components/UserFeedback'
+import { AdminLoginMonitoring, SecurityLoginActivity } from './security/SecurityPages'
 
 const queryClient = new QueryClient()
 
@@ -80,6 +82,7 @@ const adminNavigation = [
   { id: 'reports', label: 'Data Export', path: '/administrator/reports', icon: ChartNoAxesCombined },
   { id: 'logs', label: 'Activity Logs', path: '/administrator/logs', icon: ScrollText },
   { id: 'settings', label: 'School Settings', path: '/administrator/settings', icon: Settings },
+  { id: 'security', label: 'Security Monitoring', path: '/administrator/security', icon: Shield },
 ] as const
 
 const teacherNavigation = [
@@ -90,6 +93,7 @@ const teacherNavigation = [
   { id: 'teacher-announcements', label: 'Announcements', path: '/teacher/announcements', icon: Megaphone },
   { id: 'teacher-notifications', label: 'Notifications', path: '/teacher/notifications', icon: Bell },
   { id: 'teacher-requests', label: 'Student Requests', path: '/teacher/requests', icon: ClipboardList },
+  { id: 'teacher-security', label: 'Security & Login Activity', path: '/teacher/security', icon: Shield },
 ] as const
 
 const guardNavigation = [
@@ -101,6 +105,7 @@ const guardNavigation = [
   { id: 'guard-announcements', label: 'Announcements', path: '/guard/announcements', icon: Megaphone },
   { id: 'guard-notifications', label: 'Notifications', path: '/guard/notifications', icon: Bell },
   { id: 'guard-activity', label: 'Gate History', path: '/guard/activity', icon: Activity },
+  { id: 'guard-security', label: 'Security & Login Activity', path: '/guard/security', icon: Shield },
 ] as const
 
 const studentNavigation = [
@@ -115,6 +120,7 @@ const studentNavigation = [
   { id:'student-announcements', label:'Announcements', path:'/student/announcements', icon:Megaphone },
   { id:'student-notifications', label:'Notifications', path:'/student/notifications', icon:Bell },
   { id:'student-requests', label:'My Requests', path:'/student/requests', icon:ScrollText },
+  { id:'student-security', label:'Security & Login Activity', path:'/student/security', icon:Shield },
 ] as const
 
 const parentNavigation = [
@@ -125,6 +131,7 @@ const parentNavigation = [
   { id:'parent-announcements',label:'Announcements',path:'/parent/announcements',icon:Megaphone },
   { id:'parent-notifications',label:'Notifications',path:'/parent/notifications',icon:Bell },
   { id:'parent-preferences',label:'Notification Preferences',path:'/parent/preferences',icon:Settings },
+  { id:'parent-security',label:'Security & Login Activity',path:'/parent/security',icon:Shield },
 ] as const
 
 function App() {
@@ -158,34 +165,58 @@ function LoginScreen() {
   const [challenge, setChallenge] = useState<{ id: string; email: string; expiresAt: string; resendAt: string; firstTime: boolean } | null>(null)
   const [code, setCode] = useState('')
   const [clockNow, setClockNow] = useState(Date.now())
+  const deviceIdRef = useRef('')
+  const getDeviceIdentifier = () => {
+    if (deviceIdRef.current) return deviceIdRef.current
+    try {
+      const saved = localStorage.getItem('campusync:device-id')
+      const id = saved && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(saved) ? saved : crypto.randomUUID()
+      localStorage.setItem('campusync:device-id', id)
+      deviceIdRef.current = id
+    } catch { deviceIdRef.current = crypto.randomUUID() }
+    return deviceIdRef.current
+  }
   useEffect(() => { const timer = window.setInterval(() => setClockNow(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError('')
-    if (!supabase) {
+    const client = supabase
+    if (!client) {
       setError('Supabase is not configured. Add the project URL and publishable key to .env.local.')
       return
     }
     setSubmitting(true)
-    const { data, error: authError } = await supabase.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password } })
-    setSubmitting(false)
-    if (authError || !data?.challengeId) {
+    const { data, error: authError } = await client.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password, deviceIdentifier: getDeviceIdentifier() } })
+    if (authError) {
+      setSubmitting(false)
       setError(await loginFunctionError(authError, data, 'Sign-in could not be completed. Check your email and password, then try again.'))
-    } else setChallenge({ id: data.challengeId, email: data.maskedEmail, expiresAt: data.expiresAt, resendAt: data.resendAt, firstTime: data.verificationKind === 'FIRST_TIME' })
+      return
+    }
+    if (data?.access_token && data?.refresh_token) {
+      const { error: sessionError } = await client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
+      setSubmitting(false)
+      if (sessionError) setError('Sign-in was verified, but CampuSync could not start your session. Please try again.')
+      else { setChallenge(null); setCode('') }
+      return
+    }
+    setSubmitting(false)
+    if (!data?.challengeId) setError('Sign-in could not be completed. Check your credentials and try again.')
+    else setChallenge({ id: data.challengeId, email: data.maskedEmail, expiresAt: data.expiresAt, resendAt: data.resendAt, firstTime: data.verificationKind === 'FIRST_TIME' })
   }
   const verifyCode = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setError(''); if (!supabase || !challenge) return; setSubmitting(true)
-    const { data, error: verifyError } = await supabase.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code } })
+    event.preventDefault(); setError(''); const client = supabase; if (!client || !challenge) return; setSubmitting(true)
+    const { data, error: verifyError } = await client.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code, deviceIdentifier: getDeviceIdentifier() } })
     if (verifyError || !data?.access_token || !data?.refresh_token) { setSubmitting(false); setError(await loginFunctionError(verifyError, data, 'That code could not be verified. Check it and try again, or request a new one.')); return }
-    const { error: sessionError } = await supabase.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
+    const { error: sessionError } = await client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
     setSubmitting(false)
     if (sessionError) setError('Verification succeeded, but your sign-in session could not be started. Please sign in again.')
-    else void supabase.rpc('record_auth_activity', { p_action: 'login' })
+    else void client.rpc('record_auth_activity', { p_action: 'login' })
   }
   const resendCode = async () => {
-    if (!supabase || !challenge) return
+    const client = supabase
+    if (!client || !challenge) return
     setError(''); setSubmitting(true)
-    const { data, error: resendError } = await supabase.functions.invoke('login-otp', { body: { action: 'resend', challengeId: challenge.id } })
+    const { data, error: resendError } = await client.functions.invoke('login-otp', { body: { action: 'resend', challengeId: challenge.id } })
     setSubmitting(false)
     if (resendError || !data?.challengeId) setError(await loginFunctionError(resendError, data, 'A new code could not be sent yet. Please try again shortly.'))
     else { setChallenge({ ...challenge, expiresAt: data.expiresAt, resendAt: data.resendAt }); setCode('') }
@@ -299,7 +330,8 @@ function AuthGate() {
   }, [])
 
   useEffect(() => {
-    if (!session || !supabase) {
+    const client = supabase
+    if (!session || !client) {
       setProfile(null)
       setProfileLoading(false)
       return
@@ -308,7 +340,7 @@ function AuthGate() {
     let active = true
     setProfileLoading(true)
     const loadProfile = async () => {
-      const { data, error } = await supabase.from('profiles').select('id, full_name, role, is_active, profile_photo_path')
+      const { data, error } = await client.from('profiles').select('id, full_name, role, is_active, profile_photo_path')
         .eq('auth_user_id', session.user.id).maybeSingle()
         if (!active) return
         if (error && !navigator.onLine) {
@@ -332,10 +364,10 @@ function AuthGate() {
       if (navigator.onLine) {
         // Validate the server-recorded OTP session directly. This avoids
         // depending on an optional Auth Hook to inject a custom JWT claim.
-        const { data: verified, error } = await supabase.rpc('schoolguard_login_otp_verified')
+        const { data: verified, error } = await client.rpc('schoolguard_login_otp_verified')
         if (!active) return
         if (error || verified !== true) {
-          void supabase.auth.signOut()
+          void client.auth.signOut()
           setProfile(null)
           setProfileLoading(false)
           setProfileError(error ? 'Could not confirm your verified session. Please try signing in again.' : 'Your verified session could not be found. Please request a new code and sign in again.')
@@ -558,12 +590,17 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
 
               <Routes>
                 <Route path="/" element={<Navigate to={`/${profile.role}`} replace />} />
+                <Route path="/administrator/security" element={<RoleRoute profile={profile} role="administrator"><DashboardShell title="Security Monitoring" subtitle="Review account sign-ins and security events"><AdminLoginMonitoring /></DashboardShell></RoleRoute>} />
                 <Route path="/administrator/*" element={<RoleRoute profile={profile} role="administrator"><AdministratorDashboard profile={profile} /></RoleRoute>} />
                 <Route path="/administrator/parent-links" element={<RoleRoute profile={profile} role="administrator"><DashboardShell title="Parent-student link requests" subtitle="Verify family relationships"><ParentLinkRequests /></DashboardShell></RoleRoute>} />
+                <Route path="/guard/security" element={<RoleRoute profile={profile} role="guard"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/guard/*" element={<RoleRoute profile={profile} role="guard"><GuardDashboard profile={profile} /></RoleRoute>} />
+                <Route path="/student/security" element={<RoleRoute profile={profile} role="student"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/student/*" element={<RoleRoute profile={profile} role="student"><StudentPortal profile={profile} /></RoleRoute>} />
                 <Route path="/teacher/requests" element={<RoleRoute profile={profile} role="teacher"><DashboardShell title="Student Requests" subtitle="Review requests for your assigned students"><StudentRequestReview role="teacher" profileId={profile.id} /></DashboardShell></RoleRoute>} />
+                <Route path="/teacher/security" element={<RoleRoute profile={profile} role="teacher"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/teacher/*" element={<RoleRoute profile={profile} role="teacher"><TeacherPortal profile={profile} /></RoleRoute>} />
+                <Route path="/parent/security" element={<RoleRoute profile={profile} role="parent"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/parent/*" element={<RoleRoute profile={profile} role="parent"><ParentPortal profile={profile} /></RoleRoute>} />
                 <Route path="*" element={<Navigate to={`/${profile.role}`} replace />} />
               </Routes>
