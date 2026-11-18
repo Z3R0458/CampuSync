@@ -183,8 +183,15 @@ Deno.serve(async request => {
     }
     const { data: resultRows, error } = await db.rpc('login_otp_verify_challenge', { p_challenge_id: challengeId, p_candidate_hmac: await hmac(hmacSecret, `${challengeId}:${code}`) })
     const result = Array.isArray(resultRows) ? resultRows[0] : null
-    if (error || result?.result !== 'verified') {
-      const message = result?.result === 'incorrect' ? 'Incorrect code. Try again.' : result?.result === 'locked' ? 'Too many incorrect attempts. Return to sign in to request a new code.' : result?.result === 'expired' ? 'This code has expired. Return to sign in to request a new code.' : 'Invalid or expired verification code.'
+    if (error) {
+      // Keep infrastructure/schema failures distinct from a rejected OTP. The
+      // previous generic response made database RPC errors look like bad codes.
+      await logEvent('otp_verification_failure', null, '', { result: 'rpc_error', database_code: error.code ?? 'unknown' })
+      console.error('OTP challenge verification RPC failed', { code: error.code ?? 'unknown' })
+      return respond(origin, { error: 'The verification service is temporarily unavailable. Please return to login and try again.' }, 503)
+    }
+    if (result?.result !== 'verified') {
+      const message = result?.result === 'incorrect' ? 'Incorrect code. Try again.' : result?.result === 'locked' ? 'Too many incorrect attempts. Return to sign in to request a new code.' : result?.result === 'expired' ? 'This code has expired. Return to sign in to request a new code.' : result?.result === 'invalid' ? 'This code was replaced or already used. Return to login and request a fresh code.' : 'The verification challenge could not be found. Return to login and request a fresh code.'
       const { data: challengeOwner } = await db.from('login_otp_challenges').select('auth_user_id,email').eq('id', challengeId).maybeSingle()
       await logEvent(result?.result === 'expired' ? 'otp_expiration' : 'otp_verification_failure', challengeOwner?.auth_user_id ?? null, challengeOwner?.email ?? '', { result: result?.result ?? 'invalid' })
       await logEvent('failed_login', challengeOwner?.auth_user_id ?? null, challengeOwner?.email ?? '', { reason: 'otp_verification_failed' })
