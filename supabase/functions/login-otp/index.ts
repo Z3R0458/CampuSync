@@ -236,7 +236,14 @@ Deno.serve(async request => {
     if (!profile?.is_active || !['administrator', 'guard', 'student', 'teacher', 'parent'].includes(profile.role)) { await logEvent('account_access_denied', authUserId, registeredEmail, { reason: 'inactive_or_unsupported_role' }); return respond(origin, { error: 'This account is inactive. Please contact your school administrator.' }, 403) }
     const { data: verification, error: verificationError } = await admin.from('school_email_verifications').select('verified_at').eq('auth_user_id', authUserId).maybeSingle()
     if (verificationError) return respond(origin, { error: 'Login verification is not configured. Please contact your school administrator.' }, 503)
-    const verificationKind = firstTime || (!verification?.verified_at && !authEmailVerifiedAt) ? 'FIRST_TIME' : 'LOGIN'
+    let approvedStudentNeedsFirstLoginCode = false
+    if (profile.role === 'student' && !verification?.verified_at) {
+      const { data: approvedApplication, error: applicationError } = await admin.from('student_applications')
+        .select('id').eq('approved_profile_id', profile.id).eq('application_status', 'APPROVED').maybeSingle()
+      if (applicationError) return respond(origin, { error: 'Login verification is not configured. Please contact your school administrator.' }, 503)
+      approvedStudentNeedsFirstLoginCode = Boolean(approvedApplication)
+    }
+    const verificationKind = firstTime || (!verification?.verified_at && (!authEmailVerifiedAt || approvedStudentNeedsFirstLoginCode)) ? 'FIRST_TIME' : 'LOGIN'
     const sessionId = session ? String(jwtClaims(session.access_token).session_id ?? '') : crypto.randomUUID()
     if (!sessionId) return respond(origin, { error: genericFailure }, 401)
 

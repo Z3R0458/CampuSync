@@ -10,13 +10,26 @@ async function hmac(secret: string, value: string) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name:'HMAC', hash:'SHA-256' }, false, ['sign'])
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))), byte=>byte.toString(16).padStart(2,'0')).join('')
 }
+async function sendStudentSetupEmail(admin: ReturnType<typeof createClient>, email: string, fullName: string, studentNumber: string) {
+  const publicUrl = Deno.env.get('APP_PUBLIC_URL')
+  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email, ...(publicUrl ? { options: { redirectTo: publicUrl } } : {}) })
+  if (error || !data.properties?.action_link) throw new Error('Secure password setup link could not be created.')
+  const safeLink = escapeEmailHtml(data.properties.action_link)
+  await sendSchoolEmail({
+    to: email,
+    subject: 'Your CampuSync student account is ready',
+    preheader: 'Set your password, then verify your first sign-in.',
+    text: `Hello ${fullName},\n\nYour student application has been approved. Use this secure link to choose your password:\n${data.properties.action_link}\n\nStudent number: ${studentNumber}\nAfter setting your password, sign in with your school email. CampuSync will send a one-time verification code for your first sign-in. This setup link expires; request a new one by checking your application status again.`,
+    html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your CampuSync student account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${escapeHtml(fullName)},</p><p style="margin:0 0 22px;color:#475569;font-size:15px;line-height:1.7">Your student application has been approved. Use the secure link below to choose your own password. CampuSync will send a one-time verification code when you sign in for the first time.</p><p style="margin:0 0 22px"><a href="${safeLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Set my password</a></p><div style="padding:14px 16px;border:1px solid #e2ebe6;border-radius:12px;background:#f8fbf9;color:#475569;font-size:14px;line-height:1.7"><b style="color:#16332a">Student number:</b> ${escapeHtml(studentNumber)}</div><p style="margin:18px 0 0;color:#64756e;font-size:13px;line-height:1.6">This secure link expires. If you did not request a school account, contact Valencia National High School.</p>`,
+  })
+}
 
 Deno.serve(async request => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (request.method !== 'POST') return reply({ error: 'Method not allowed.' }, 405)
   // CORS is not an authorization boundary. Vercel preview and installed PWA
-  // hosts vary; authenticated actions below validate the Supabase session,
-  // verified-session record, and active administrator role on every request.
+  // hosts vary; authenticated actions below validate the Supabase Auth token
+  // and active administrator role on every request.
   const url = Deno.env.get('SUPABASE_URL'), anon = Deno.env.get('SUPABASE_ANON_KEY'), key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   const hmacSecret = Deno.env.get('OTP_HMAC_SECRET')
   if (!url || !anon || !key || !hmacSecret) return reply({ error: 'Application service is not configured.' }, 503)
@@ -25,7 +38,7 @@ Deno.serve(async request => {
   const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
   if (input.action === 'submit' || input.action === 'track' || input.action === 'correct') {
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown-ip'
-    const max = input.action === 'track' ? 30 : 8
+    const max = input.action === 'track' ? 10 : 8
     const { data: allowed, error } = await admin.rpc('login_otp_allow_request', { p_key: await hmac(hmacSecret, `student-application:${input.action}:${ip}`), p_window_seconds: 900, p_max_requests: max })
     if (error || allowed !== true) return reply({ error:'Too many requests. Please wait before trying again.' },429)
   }
@@ -60,9 +73,41 @@ Deno.serve(async request => {
   if (input.action === 'track') {
     const reference = clean(input.reference, 24).toUpperCase(), token = clean(input.tracking_token, 100)
     if (!reference || token.length < 32) return reply({ error: 'Enter the application reference and tracking code.' }, 400)
-    const { data, error } = await admin.from('student_applications').select('reference_code,application_status,decision_note,created_at,updated_at,reviewed_at,first_name,middle_name,last_name,suffix,birth_date,gender,address,phone,guardian_full_name,guardian_relationship,guardian_contact_number,guardian_address,email,grade_level,requested_section,school_year').eq('reference_code', reference).eq('tracking_token_hash', await hash(token)).maybeSingle()
+    const { data, error } = await admin.from('student_applications').select('id,reference_code,application_status,decision_note,created_at,updated_at,reviewed_at,first_name,middle_name,last_name,suffix,birth_date,gender,address,phone,guardian_full_name,guardian_relationship,guardian_contact_number,guardian_address,email,grade_level,requested_section,school_year,approved_profile_id,activation_email_status,activation_email_last_attempt_at').eq('reference_code', reference).eq('tracking_token_hash', await hash(token)).maybeSingle()
     if (error || !data) return reply({ error: 'We could not find an application using those details.' }, 404)
-    return reply({ application: data })
+    let activationEmailStatus = data.activation_email_status ?? 'PENDING'
+    let activationEmailNotice = ''
+    if (data.application_status === 'APPROVED' && data.approved_profile_id && activationEmailStatus !== 'SENT') {
+      const attemptedAt = data.activation_email_last_attempt_at ? Date.parse(data.activation_email_last_attempt_at) : 0
+      const canRetry = activationEmailStatus === 'PENDING' || (activationEmailStatus === 'FAILED' && Date.now() - attemptedAt >= 60_000)
+      const staleSend = activationEmailStatus === 'SENDING' && Date.now() - attemptedAt >= 5 * 60_000
+      if (canRetry || staleSend) {
+        let claim = admin.from('student_applications').update({ activation_email_status: 'SENDING', activation_email_last_attempt_at: new Date().toISOString() }).eq('id', data.id).eq('activation_email_status', activationEmailStatus)
+        if (staleSend) claim = claim.eq('activation_email_last_attempt_at', data.activation_email_last_attempt_at)
+        const { data: claimed } = await claim.select('id').maybeSingle()
+        if (claimed) {
+          const { data: student } = await admin.from('students').select('student_id').eq('profile_id', data.approved_profile_id).maybeSingle()
+          try {
+            if (!student?.student_id) throw new Error('Student account record is unavailable.')
+            await sendStudentSetupEmail(admin, data.email, [data.first_name, data.middle_name, data.last_name, data.suffix].filter(Boolean).join(' '), student.student_id)
+            const { error: sentUpdateError } = await admin.from('student_applications').update({ activation_email_status: 'SENT', activation_email_sent_at: new Date().toISOString() }).eq('id', data.id).eq('activation_email_status', 'SENDING')
+            if (sentUpdateError) throw sentUpdateError
+            activationEmailStatus = 'SENT'
+          } catch (sendError) {
+            console.error('Student setup email resend failed', { code: (sendError as { code?: string }).code ?? 'delivery_error' })
+            await admin.from('student_applications').update({ activation_email_status: 'FAILED' }).eq('id', data.id).eq('activation_email_status', 'SENDING')
+            activationEmailStatus = 'FAILED'
+            activationEmailNotice = 'The secure setup email could not be sent. Please check again in a minute or contact the school office.'
+          }
+        } else activationEmailStatus = 'SENDING'
+      } else if (activationEmailStatus === 'FAILED') activationEmailNotice = 'The secure setup email could not be sent yet. Please check again in a minute or contact the school office.'
+      else activationEmailNotice = 'Your approved account setup email is being prepared. Check your registered email shortly.'
+    }
+    const application = { ...data, activation_email_status: activationEmailStatus, activation_email_notice: activationEmailNotice }
+    delete (application as Partial<typeof application>).approved_profile_id
+    delete (application as Partial<typeof application>).activation_email_last_attempt_at
+    delete (application as Partial<typeof application>).id
+    return reply({ application })
   }
 
   if (input.action === 'correct') {
@@ -90,10 +135,6 @@ Deno.serve(async request => {
   const authClient = createClient(url, anon, { auth: { persistSession: false }, global: { headers: { Authorization: authorization } } })
   const { data: authData, error: authError } = await authClient.auth.getUser(token)
   if (authError || !authData.user) return reply({ error: 'Session is invalid or expired.' }, 401)
-  let claims: Record<string, unknown>
-  try { claims = JSON.parse(atob(token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) } catch { return reply({ error: 'Email verification is required.' }, 403) }
-  const { data: verified } = await admin.from('login_otp_verified_sessions').select('session_id').eq('session_id', String(claims.session_id ?? '')).eq('auth_user_id', authData.user.id).is('revoked_at', null).gt('expires_at', new Date().toISOString()).maybeSingle()
-  if (!verified) return reply({ error: 'Email verification is required.' }, 403)
   const { data: actor } = await admin.from('profiles').select('id,full_name,email,role,is_active').eq('auth_user_id', authData.user.id).maybeSingle()
   if (actor?.role !== 'administrator' || !actor.is_active) return reply({ error: 'Administrator permission is required.' }, 403)
 
@@ -146,16 +187,15 @@ Deno.serve(async request => {
     await admin.auth.admin.deleteUser(created.user.id)
     return reply({ success:true, alreadyApproved:true, emailSent:false, emailNotice:'This application was already approved. The existing student account was preserved.' })
   }
-  const publicUrl = Deno.env.get('APP_PUBLIC_URL')
-  const { data: recovery, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: application.email, ...(publicUrl ? { options: { redirectTo: publicUrl } } : {}) })
+  const attemptAt = new Date().toISOString()
+  const { error: sendingStateError } = await admin.from('student_applications').update({ activation_email_status: 'SENDING', activation_email_last_attempt_at: attemptAt }).eq('id', appId).eq('application_status', 'APPROVED')
   let emailSent = false
-  if (!linkError && recovery.properties?.action_link) {
-    try {
-      const safeActionLink = escapeEmailHtml(recovery.properties.action_link)
-      await sendSchoolEmail({ to: application.email, subject: 'Your CampuSync student account is ready', preheader: 'Your student account is ready. Set your password to get started.', text: `Hello ${fullName},\n\nYour student account has been approved. Set your password using the secure link in this email.\n\nStudent number: ${studentNumber}`, html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your student account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${escapeHtml(fullName)},</p><p style="margin:0 0 22px;color:#475569;font-size:15px;line-height:1.7">Your student application has been approved. Set a password to activate your account, then sign in with your school email and verification code.</p><p style="margin:0 0 22px"><a href="${safeActionLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Set my password</a></p><div style="padding:14px 16px;border:1px solid #e2ebe6;border-radius:12px;background:#f8fbf9;color:#475569;font-size:14px;line-height:1.7"><b style="color:#16332a">Student number:</b> ${escapeHtml(studentNumber)}</div><p style="margin:18px 0 0;color:#64756e;font-size:13px;line-height:1.6">If you were not expecting this message, contact your school administrator.</p>` })
-      emailSent = true
-    } catch { emailSent = false }
-  }
+  if (!sendingStateError) {
+    try { await sendStudentSetupEmail(admin, application.email, fullName, studentNumber); emailSent = true }
+    catch (sendError) { console.error('Student setup email delivery failed', { code: (sendError as { code?: string }).code ?? 'delivery_error' }) }
+  } else console.error('Could not set student setup email state', { code: sendingStateError.code ?? 'unknown' })
+  const { error: emailStateError } = await admin.from('student_applications').update({ activation_email_status: emailSent ? 'SENT' : 'FAILED', activation_email_sent_at: emailSent ? new Date().toISOString() : null }).eq('id', appId).eq('application_status', 'APPROVED')
+  if (emailStateError) { emailSent = false; console.error('Could not save student setup email status', { code: emailStateError.code ?? 'unknown' }) }
   await admin.from('audit_logs').insert({ actor_id: actor.id, actor_name_snapshot: actor.full_name, actor_email_snapshot: actor.email, actor_role_snapshot: 'administrator', entity_type: 'student_applications', entity_id: appId, entity_label: application.reference_code, action: 'student_activation_email_delivery', module: 'enrollment', description: emailSent ? 'Student activation email sent' : 'Student activation email delivery failed or is not configured', new_values: { email_sent: emailSent }, changed_fields: ['email_sent'], status: emailSent ? 'success' : 'failed', details: {} })
-  return reply({ success: true, student: approved, emailSent, emailNotice: emailSent ? null : 'Account was created, but activation email delivery did not complete. Use User Accounts to send a password reset link.' }, 201)
+  return reply({ success: true, student: approved, emailSent, emailNotice: emailSent ? null : 'Account was created, but the secure password setup email could not be confirmed. The student can check application status to retry delivery.' }, 201)
 })
