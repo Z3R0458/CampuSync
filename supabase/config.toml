@@ -1,0 +1,5 @@
+[functions.login-otp]
+verify_jwt = false
+
+[functions.student-applications]
+verify_jwt = false

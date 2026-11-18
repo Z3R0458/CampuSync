@@ -1,0 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', sans-serif;
+  --font-display: 'Plus Jakarta Sans', sans-serif;
+  --color-brand-green: #63B88A;
+  --color-brand-dark: #27865A;
+  --color-brand-soft: #DFF3E8;
+  --color-brand-blue: #3976C8;
+  --color-brand-soft-blue: #DCEBFA;
+  --color-background: #F7FAFC;
+  --color-surface: #FFFFFF;
+  --color-main-text: #243B53;
+  --color-secondary-text: #64748B;
+  --color-border: #E9EEF3;
+}
+
+:root {
+  font-family: 'Inter', sans-serif;
+  color: var(--color-main-text);
+  background: var(--color-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f7fafc 0%, #edf4f7 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input,
+select
+{
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 184, 138, 0.5);
+  border-radius: 999px;
+}

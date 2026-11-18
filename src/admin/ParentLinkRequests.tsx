@@ -1,0 +1,47 @@
+import { useCallback, useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+import { friendlyError, useFeedback } from '../components/UserFeedback'
+
+type Row = Record<string, unknown>
+const dateTime = (value: unknown) => value ? new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(String(value))) : '—'
+
+export function ParentLinkRequests() {
+  const { confirmAction } = useFeedback()
+  const [rows, setRows] = useState<Row[]>([])
+  const [links, setLinks] = useState<Row[]>([])
+  const [notes, setNotes] = useState<Record<string, string>>({})
+  const [filter, setFilter] = useState('PENDING')
+  const [search, setSearch] = useState('')
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const refresh = useCallback(async () => {
+    if (!supabase) return
+    const [requests, relationships] = await Promise.all([
+      supabase.from('parent_linking_requests').select('*,parents(id,relationship,contact_number,profiles(full_name,email,phone))').order('created_at', { ascending: false }).limit(500),
+      supabase.from('student_guardians').select('id,relationship_type,verification_status,verified_at,students(student_id,grade_level,profiles(full_name)),parents(profiles(full_name,email))').order('verified_at', { ascending: false }).limit(500),
+    ])
+    if (requests.error) setError(friendlyError(requests.error)); else setRows(requests.data ?? [])
+    if (relationships.error) setError(friendlyError(relationships.error)); else setLinks(relationships.data ?? [])
+  }, [])
+  useEffect(() => { void refresh(); if(!supabase)return; const client=supabase; const channel=client.channel('parent-link-admin-review').on('postgres_changes',{event:'*',schema:'public',table:'parent_linking_requests'},()=>void refresh()).subscribe(); return()=>{void client.removeChannel(channel)} }, [refresh])
+
+  const review = async (row: Row, next: 'APPROVED' | 'REJECTED') => {
+    if (!supabase) return
+    const key = String(row.id); setBusy(key); setError(''); setNotice('')
+    try { await confirmAction({title:`${next === 'APPROVED' ? 'Approve' : 'Reject'} this parent-student link?`,description:next === 'APPROVED'?'Confirm that official school records verify this relationship.':'The parent will not receive access to this student.',itemName:String(row.submitted_student_name??'Student link request'),confirmLabel:next === 'APPROVED'?'Approve verified link':'Reject request',tone:next === 'REJECTED'?'danger':'primary',successMessage:`Link request ${next.toLowerCase()}.`,onConfirm:async()=>{const {error:actionError}=await supabase!.rpc('review_parent_link_request',{p_request_id:key,p_status:next,p_note:notes[key]||null});if(actionError)throw actionError;void supabase!.functions.invoke('dispatch-push',{body:{request_id:key}});await refresh()}}) } finally { setBusy('') }
+  }
+  const revoke = async (row: Row) => {
+    if (!supabase) return
+    const id = String(row.id); setBusy(id); setError('')
+    try { await confirmAction({title:'Revoke this parent-student relationship?',description:'Only this guardian link will be revoked. Other verified guardians remain linked.',itemName:String((row.students as Row|null)?.student_id??'Student relationship'),confirmLabel:'Revoke relationship',tone:'danger',successMessage:'Parent-student relationship revoked.',onConfirm:async()=>{const {error:actionError}=await supabase!.rpc('revoke_parent_student_link',{p_relationship_id:id,p_note:notes[id]||null});if(actionError)throw actionError;await refresh()}}) } finally { setBusy('') }
+  }
+  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && JSON.stringify(row).toLowerCase().includes(search.toLowerCase()))
+  return <div className="space-y-5">
+    {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}{notice && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900">{notice}</p>}
+    <section className="rounded-2xl border bg-white p-4 shadow-sm"><div className="grid gap-3 sm:grid-cols-[1fr_12rem_auto]"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search parent or student" className="rounded-xl border px-3 py-2 text-sm"/><select value={filter} onChange={e => setFilter(e.target.value)} className="rounded-xl border px-3 py-2 text-sm"><option value="PENDING">Pending</option>{['APPROVED','REJECTED','REVOKED','all'].map(value => <option key={value} value={value}>{value === 'all' ? 'All statuses' : value}</option>)}</select><button onClick={() => void refresh()} className="rounded-xl border px-4 py-2 text-sm font-semibold">Refresh</button></div>
+    <div className="mt-4 grid gap-3 lg:grid-cols-2">{visible.map(row => { const parent = Array.isArray(row.parents) ? row.parents[0] as Row : row.parents as Row | null; const profile = parent?.profiles as Row | null; const note=notes[String(row.id)]??''; return <article key={String(row.id)} className="rounded-2xl border p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-bold">{String(profile?.full_name ?? 'Parent account')}</h3><p className="text-sm text-slate-500">{String(profile?.email ?? '—')} · {String(parent?.contact_number ?? profile?.phone ?? 'No phone')}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold">{String(row.status)}</span></div><dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">{[['Student ID',row.student_number],['Student name',row.submitted_student_name],['Grade and section',`${String(row.submitted_grade_level)} · ${String(row.submitted_section_name)}`],['Relationship',row.relationship_type],['Submitted',dateTime(row.created_at)],['Decision',row.decision_note ?? '—']].map(([label,value])=><div key={String(label)}><dt className="text-xs text-slate-500">{String(label)}</dt><dd className="font-medium">{String(value ?? '—')}</dd></div>)}</dl>{row.status === 'PENDING' && <><label className="mt-3 block text-xs font-semibold">Administrator verification note<textarea value={note} onChange={e => setNotes(old => ({ ...old, [String(row.id)]: e.target.value }))} maxLength={1000} rows={2} className="mt-1 w-full rounded-xl border p-2 text-sm" placeholder="Record what official school record was checked"/></label><div className="mt-3 flex gap-2"><button disabled={busy === row.id||note.trim().length<4} onClick={() => void review(row, 'APPROVED')} className="rounded-lg bg-emerald-800 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Approve verified link</button><button disabled={busy === row.id} onClick={() => void review(row, 'REJECTED')} className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">Reject</button></div></>}</article> })}{!visible.length && <p className="py-8 text-center text-sm text-slate-500">No matching link requests.</p>}</div>
+    </section>
+    <section className="rounded-2xl border bg-white p-4 shadow-sm"><h2 className="font-bold">Verified parent-student relationships</h2><p className="mt-1 text-sm text-slate-500">Revocation affects only the selected guardian link.</p><div className="mt-3 divide-y">{links.map(row => { const child = Array.isArray(row.students) ? row.students[0] as Row : row.students as Row | null; const studentProfile = child?.profiles as Row | null; const par = Array.isArray(row.parents) ? row.parents[0] as Row : row.parents as Row | null; const parentProfile = par?.profiles as Row | null; return <div key={String(row.id)} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><span><b>{String(parentProfile?.full_name ?? 'Parent')}</b> ↔ {String(studentProfile?.full_name ?? child?.student_id ?? 'Student')} · {String(row.relationship_type ?? '—')} · {String(row.verification_status)}</span>{row.verification_status === 'APPROVED' && <button disabled={busy === row.id} onClick={() => void revoke(row)} className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-800">Revoke</button>}</div> })}{!links.length && <p className="py-4 text-sm text-slate-500">No verified guardian relationships.</p>}</div></section>
+  </div>
+}

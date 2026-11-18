@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "CampuSync",
+  "short_name": "CampuSync",
+  "description": "Smart Campus Management and Synchronization Platform",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7FAFC",
+  "theme_color": "#27865A",
+  "icons": [
+    { "src": "/icons/campusync-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/campusync-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/campusync-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
