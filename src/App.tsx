@@ -42,7 +42,7 @@ import type { Html5Qrcode as Html5QrcodeType } from 'html5-qrcode'
 import { TeacherPortal } from './teacher/TeacherPortal'
 import { ProfileAvatar, ProfilePhotoManager } from './components/ProfilePhoto'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Session } from '@supabase/supabase-js'
 
@@ -279,9 +279,9 @@ function LoginScreen() {
           <span className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-white/30 bg-white/95 shadow-lg backdrop-blur"><img src="/campusync-logo.png" alt="CampuSync" className="h-full w-full object-contain" /></span>
           <span><span className="block font-[var(--font-display)] text-lg font-extrabold tracking-tight">CampuSync</span><span className="block text-xs text-white/75">Valencia NHS portal</span></span>
         </div>
-        <div className="relative z-10 max-w-2xl py-8 lg:pb-16 lg:pt-20">
-          <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white/90 backdrop-blur"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300" /> Campus operations portal</p>
-          <h1 className="max-w-xl font-[var(--font-display)] text-3xl font-extrabold leading-[1.12] tracking-tight sm:text-4xl lg:text-5xl xl:text-6xl">A safer, more connected school day.</h1>
+        <div className="login-brand-content relative z-10 max-w-2xl py-8 lg:pb-14 lg:pt-16">
+          <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white/90 backdrop-blur"><span className="h-1.5 w-1.5 rounded-full bg-cyan-300" /> Connected school platform</p>
+          <h1 className="max-w-xl font-[var(--font-display)] text-3xl font-extrabold leading-[1.12] tracking-tight sm:text-4xl lg:text-[3.25rem]">One connected campus. A safer school day.</h1>
           <p className="mt-4 max-w-lg text-sm leading-6 text-white/80 sm:text-base sm:leading-7">Attendance, campus access, and school updates—together in one secure place.</p>
         </div>
         <p className="relative z-10 hidden text-xs text-white/70 lg:block">Valencia National High School <span className="mx-2 text-white/40">•</span> Secure school access</p>
@@ -289,9 +289,9 @@ function LoginScreen() {
       </section>
 
       <section className="login-panel flex min-h-[calc(100vh-260px)] items-center justify-center bg-[#f7f9f8] px-5 py-10 sm:min-h-[calc(100vh-340px)] sm:px-10 lg:min-h-screen lg:px-12 xl:px-20">
-        <div className="w-full max-w-[430px]">
+        <div className="login-form-card w-full max-w-[430px]">
           <div className="mb-8 flex items-center gap-3 lg:hidden"><img src="/campusync-logo.png" alt="CampuSync" className="h-14 w-14 rounded-xl bg-white object-contain" /><span><p className="font-[var(--font-display)] text-xl font-extrabold tracking-tight text-[var(--color-main-text)]">CampuSync</p><p className="mt-1 text-sm text-[var(--color-secondary-text)]">Valencia NHS portal</p></span></div>
-          <div className="mb-8">
+          <div className="login-form-content mb-8">
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--color-brand-dark)]">Welcome back</p>
             <h2 className="mt-2 font-[var(--font-display)] text-3xl font-extrabold tracking-tight text-slate-900 sm:text-[2.1rem]">Sign in to continue</h2>
             <p className="mt-2 text-sm leading-6 text-slate-500">Use the school account provided by your administrator.</p>
@@ -550,7 +550,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
   return (
         <div className="dashboard-shell min-h-screen text-[var(--color-main-text)]">
           <div className="mx-auto flex max-w-[1680px] gap-5 p-3 sm:p-5 xl:gap-7 xl:p-7">
-            <aside className="dashboard-sidebar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-72 shrink-0 flex-col rounded-[26px] border bg-white/90 p-5 backdrop-blur md:flex">
+            <aside className="dashboard-sidebar sticky top-5 hidden h-[calc(100vh-2.5rem)] w-64 shrink-0 flex-col rounded-[26px] border bg-white/90 p-4 backdrop-blur lg:w-64 md:flex">
               <div className="mb-8 flex items-center gap-3">
                 <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-white">
                   <img src="/campusync-logo.png" alt="CampuSync" className="h-full w-full object-contain" />
@@ -573,26 +573,15 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
               </div>
 
               <nav className="space-y-2 overflow-y-auto">
-                {(profile.role === 'administrator' ? adminNavigation : profile.role === 'student' ? studentNavigation : profile.role === 'teacher' ? teacherNavigation : profile.role === 'guard' ? guardNavigation : profile.role === 'parent' ? parentNavigation : roleMeta.filter(({ id }) => id === profile.role)).map(({ id, label, path, icon: Icon }) => (
-                  <NavLink
-                    key={id}
+                {(profile.role === 'administrator' ? adminNavigation : profile.role === 'student' ? studentNavigation : profile.role === 'teacher' ? teacherNavigation : profile.role === 'guard' ? guardNavigation : profile.role === 'parent' ? parentNavigation : roleMeta.filter(({ id }) => id === profile.role)).map(({ id, label, path, icon: Icon }) => {
+                  const adminSections: Record<string, string> = { dashboard: 'MAIN', students: 'STUDENT OPERATIONS', accounts: 'USER MANAGEMENT', announcements: 'SCHOOL COMMUNICATION', reports: 'ANALYTICS', logs: 'SYSTEM' }
+                  const sectionTitle = profile.role === 'administrator' ? adminSections[id] : undefined
+                  return <div key={id}>{sectionTitle && <p className="mb-1 mt-3 px-3 text-[10px] font-bold tracking-[.16em] text-slate-400">{sectionTitle}</p>}<NavLink
                     to={path}
                     end={id === 'dashboard' || id === 'student-home' || id === 'parent-home'}
-                    className={({ isActive }) =>
-                      `cs-nav-link flex items-center justify-between rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
-                        isActive
-                          ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)] shadow-sm ring-1 ring-[var(--color-brand-green)]/30'
-                          : 'text-[var(--color-secondary-text)] hover:bg-slate-50'
-                      }`
-                    }
-                  >
-                    <span className="flex items-center gap-3">
-                      <Icon className="h-4 w-4" />
-                      {label}
-                    </span>
-                    <ChevronRight className="h-4 w-4" />
-                  </NavLink>
-                ))}
+                    className={({ isActive }) => `cs-nav-link flex items-center justify-between rounded-2xl px-3 py-2.5 text-sm font-medium transition ${isActive ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)] shadow-sm ring-1 ring-[var(--color-brand-green)]/30' : 'text-[var(--color-secondary-text)] hover:bg-slate-50'}`}
+                  ><span className="flex items-center gap-3"><Icon className="h-4 w-4" />{label}</span><ChevronRight className="h-4 w-4" /></NavLink></div>
+                })}
               </nav>
 
               <div className="mt-auto rounded-2xl border border-[var(--color-border)] bg-slate-50 p-4">
@@ -615,14 +604,12 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                   </h1>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <details className="relative"><summary className="flex cursor-pointer list-none items-center gap-2 rounded-full border bg-white px-2 py-1.5 text-xs font-semibold"><ProfileAvatar path={profile.profile_photo_path} name={profile.full_name} size={28}/><span className="max-w-32 truncate">{profile.full_name}</span></summary><div className="absolute right-0 top-12 z-40 w-[min(24rem,calc(100vw-2rem))] rounded-2xl border bg-white p-3 shadow-xl">{profile.role === 'student' || profile.role === 'teacher' ? <ProfilePhotoManager currentPath={profile.profile_photo_path} name={profile.full_name} onSaved={onPhotoSaved}/> : <p className="p-2 text-sm text-slate-600">Account settings</p>}</div></details>
-                  <div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${isOnline ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                  <details className="relative"><summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold hover:border-blue-200"><ProfileAvatar path={profile.profile_photo_path} name={profile.full_name} size={30}/><span className="max-w-32 truncate">{profile.full_name}</span><ChevronRight className="h-3.5 w-3.5 rotate-90 text-slate-400"/></summary><div className="absolute right-0 top-12 z-40 w-[min(25rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl"><p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Account & app settings</p>{profile.role === 'student' || profile.role === 'teacher' ? <ProfilePhotoManager currentPath={profile.profile_photo_path} name={profile.full_name} onSaved={onPhotoSaved}/> : <p className="mb-3 text-sm text-slate-600">Signed in as {profile.full_name}</p>}<div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3"><PushNotificationToggle profileId={profile.id}/><PwaInstallGuide/></div></div></details>
+                  <div className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs font-semibold ${isOnline ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
                     {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
                     {isOnline ? 'ONLINE' : 'OFFLINE'}
                   </div>
-                  <PushNotificationToggle profileId={profile.id} />
-                  <PwaInstallGuide />
-                  <button onClick={() => void (async()=>{if(supabase){await supabase.rpc('record_auth_activity',{p_action:'logout'});await supabase.rpc('revoke_my_login_otp_session');await supabase.auth.signOut()}})()} className="flex items-center gap-2 rounded-full bg-[var(--color-brand-dark)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#1d5d45]">
+                  <button onClick={() => void (async()=>{if(supabase){await supabase.rpc('record_auth_activity',{p_action:'logout'});await supabase.rpc('revoke_my_login_otp_session');await supabase.auth.signOut()}})()} className="flex items-center gap-2 rounded-xl bg-[var(--color-brand-dark)] px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-[#1d5d45]">
                     <LogOut className="h-4 w-4" />
                     Logout
                   </button>
@@ -737,25 +724,16 @@ function DashboardShell({ title, subtitle, children }: { title: string; subtitle
   )
 }
 
-function KpiCard({ label, value, trend, accent = 'green' }: { label: string; value: string; trend: string; accent?: 'green' | 'blue' | 'amber' | 'rose' }) {
-  const accentMap = {
-    green: 'bg-emerald-50 text-emerald-700',
-    blue: 'bg-blue-50 text-blue-700',
-    amber: 'bg-amber-50 text-amber-700',
-    rose: 'bg-rose-50 text-rose-700',
-  }
-
-  return (
-    <div className="cs-card rounded-[24px] border border-[var(--color-border)] bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-[var(--color-secondary-text)]">{label}</p>
-        <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.18em] ${accentMap[accent]}`}>
-          {trend}
-        </span>
-      </div>
-      <p className="mt-5 font-[var(--font-display)] text-3xl font-extrabold tracking-tight">{value}</p>
-    </div>
-  )
+function KpiCard({ label, value, trend, accent = 'blue', icon, loading = false }: { label: string; value: string; trend: string; accent?: 'green' | 'blue' | 'cyan' | 'navy' | 'amber' | 'rose'; icon?: typeof StudentIcon; loading?: boolean }) {
+  const Icon = icon ?? Activity
+  const accentMap: Record<string, string> = { green: 'bg-teal-50 text-teal-700', blue: 'bg-blue-50 text-blue-700', cyan: 'bg-cyan-50 text-cyan-700', navy: 'bg-slate-100 text-slate-700', amber: 'bg-amber-50 text-amber-700', rose: 'bg-rose-50 text-rose-700' }
+  return <div className="cs-card relative overflow-hidden rounded-[22px] border border-[var(--color-border)] bg-white p-5 shadow-sm">
+    <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-700 via-sky-500 to-teal-400" />
+    <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium leading-5 text-[var(--color-secondary-text)]">{label}</p>
+      {loading ? <div className="mt-3 h-9 w-20 animate-pulse rounded-lg bg-slate-100" aria-label="Loading metric" /> : <p className="mt-2 font-[var(--font-display)] text-3xl font-extrabold tracking-tight text-slate-900">{value}</p>}
+    </div><span className={`shrink-0 rounded-2xl p-3 ${accentMap[accent]}`}><Icon className="h-5 w-5" aria-hidden="true"/></span></div>
+    <p className="mt-3 text-xs text-[var(--color-secondary-text)]">{trend}</p>
+  </div>
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -872,14 +850,16 @@ function AdministratorDashboard({ profile }: { profile: ActiveProfile }) {
     if (section === 'logs') return <ActivityModule profile={profile} />
     if (section === 'settings') return <SettingsModule />
   }
-  return <AdminOverview />
+  return <AdminOverview profile={profile} />
 }
 
-function AdminOverview() {
+function AdminOverview({ profile }: { profile: ActiveProfile }) {
+  const navigate = useNavigate()
   const [metrics, setMetrics] = useState({ students: 0, teachers: 0, guards: 0, enrolled: 0, pendingEnrollments: null as number | null, announcements: 0, inside: 0, visitors: 0 })
   const [requests, setRequests] = useState<{ id: string; kind: 'early' | 'visitor'; student: string; grade: string; reason: string; requested: string }[]>([])
   const [recent, setRecent] = useState<Record<string, unknown>[]>([])
   const [weekCounts, setWeekCounts] = useState<number[]>([])
+  const [weekLabels, setWeekLabels] = useState<string[]>([])
   const [dataError, setDataError] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -914,6 +894,7 @@ function AdminOverview() {
       value.setUTCDate(value.getUTCDate() + index)
       return dateKey(value)
     })
+    setWeekLabels(days.map(date => new Intl.DateTimeFormat('en-PH', { weekday: 'short', timeZone: 'Asia/Manila' }).format(new Date(`${date}T12:00:00+08:00`))))
     const dailyCounts = days.map((date) => new Set((todayEvents.data ?? [])
       .filter((event) => event.event_type === 'ENTRY' && dateKey(new Date(event.actual_scan_time)) === date)
       .map((event) => `${event.person_type}:${event.person_id}`)).size)
@@ -991,19 +972,20 @@ function AdminOverview() {
   }
 
   const kpis = [
-    { label: 'Total students', value: String(metrics.students), trend: 'Records', accent: 'green' as const },
-    { label: 'Total teachers', value: String(metrics.teachers), trend: 'Records', accent: 'blue' as const },
-    { label: 'Total guards', value: String(metrics.guards), trend: 'Active accounts', accent: 'blue' as const },
+    { label: 'Total students', value: String(metrics.students), trend: 'School records', accent: 'blue' as const, icon: StudentIcon },
+    { label: 'Total teachers', value: String(metrics.teachers), trend: 'School records', accent: 'cyan' as const, icon: UserCog },
+    { label: 'Total guards', value: String(metrics.guards), trend: 'Guard accounts', accent: 'navy' as const, icon: ShieldCheck },
     { label: 'Pending enrollment applications', value: metrics.pendingEnrollments === null ? '—' : String(metrics.pendingEnrollments), trend: 'Needs review', accent: 'amber' as const },
-    { label: 'Currently enrolled students', value: String(metrics.enrolled), trend: 'Active records', accent: 'green' as const },
-    { label: 'Active announcements', value: String(metrics.announcements), trend: 'Published records', accent: 'amber' as const },
+    { label: 'Currently enrolled students', value: String(metrics.enrolled), trend: 'Active enrollment records', accent: 'blue' as const, icon: GraduationCap },
+    { label: 'Active announcements', value: String(metrics.announcements), trend: 'Published and scheduled', accent: 'cyan' as const, icon: Megaphone },
   ]
 
   return (
-    <DashboardShell title="Administrator overview" subtitle="Updated 2 minutes ago">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <DashboardShell title="School operations overview" subtitle={new Intl.DateTimeFormat('en-PH', { dateStyle: 'full', timeZone: 'Asia/Manila' }).format(new Date())}>
+      <section className="cs-welcome relative overflow-hidden rounded-3xl border border-blue-100/80 p-5 sm:p-6"><div className="relative z-10 flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-blue-800">Administrator workspace</p><h3 className="mt-1 font-[var(--font-display)] text-2xl font-extrabold tracking-tight text-slate-950">{new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening'}, {profile.full_name.split(' ')[0]}</h3><p className="mt-1 text-sm text-slate-600">A live view of enrollment, attendance, and campus operations.</p></div><button onClick={() => navigate('/administrator/requests')} className="cs-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white">Review pending requests <ArrowRight className="h-4 w-4"/></button></div></section>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {kpis.map((item) => (
-          <KpiCard key={item.label} {...item} />
+          <KpiCard key={item.label} {...item} loading={loading} />
         ))}
       </div>
 
@@ -1011,8 +993,8 @@ function AdminOverview() {
         <section className="rounded-[28px] border border-[var(--color-border)] bg-white p-5 shadow-sm">
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <p className="text-sm font-semibold text-[var(--color-secondary-text)]">Attendance trends</p>
-              <h3 className="mt-1 font-[var(--font-display)] text-xl font-bold">Unique entries · last 7 days</h3>
+              <p className="text-sm font-semibold text-[var(--color-secondary-text)]">Attendance</p>
+              <h3 className="mt-1 font-[var(--font-display)] text-lg font-bold">Unique recorded entries · last 7 days</h3>
             </div>
             <span className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-slate-50 px-3 py-1.5 text-xs font-semibold text-[var(--color-secondary-text)]">
               <CalendarDays className="h-3.5 w-3.5" />
@@ -1020,39 +1002,35 @@ function AdminOverview() {
             </span>
           </div>
 
-          <div className="flex h-52 items-end gap-3">
+          {loading ? <div className="grid h-44 grid-cols-7 items-end gap-3" aria-label="Loading attendance chart">{Array.from({length:7},(_,i)=><div key={i} className="h-3/5 animate-pulse rounded-t-xl bg-slate-100"/>)}</div> : weekCounts.every(value => value === 0) ? <div className="flex min-h-44 flex-col items-center justify-center rounded-2xl bg-slate-50 px-5 text-center"><CalendarDays className="h-7 w-7 text-slate-300"/><p className="mt-2 text-sm font-semibold text-slate-700">No recorded entries in this period</p><p className="mt-1 text-xs text-slate-500">Attendance appears here after verified gate events are saved.</p></div> : <div className="flex h-48 items-end gap-3 border-b border-slate-100 px-1">
             {weekCounts.map((value, index) => (
               <div key={index} className="flex w-full flex-col items-center gap-2">
                 <div className="flex h-full w-full items-end justify-center">
                   <div
                     title={`${value} unique entries`}
-                    className="w-full rounded-t-2xl bg-gradient-to-t from-[var(--color-brand-green)] to-[var(--color-brand-soft)]"
-                    style={{ height: `${value ? Math.max(8, value / Math.max(1, ...weekCounts) * 100) : 2}%` }}
+                    className="w-full max-w-14 rounded-t-xl bg-gradient-to-t from-blue-700 via-sky-500 to-cyan-300 shadow-[0_5px_14px_rgba(18,100,216,.16)] transition-[height] duration-500"
+                    style={{ height: `${Math.max(9, value / Math.max(1, ...weekCounts) * 100)}%` }}
                   />
                 </div>
-                <span className="text-[10px] text-[var(--color-secondary-text)]">D{index + 1}</span>
+                <span className="text-[10px] font-medium text-[var(--color-secondary-text)]">{weekLabels[index] ?? '—'}</span>
               </div>
             ))}
-          </div>
+          </div>}
         </section>
 
         <section className="rounded-[28px] border border-[var(--color-border)] bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
-            <p className="text-sm font-semibold text-[var(--color-secondary-text)]">Campus occupancy</p>
+            <div><p className="text-sm font-semibold text-[var(--color-secondary-text)]">Campus occupancy</p><p className="mt-1 text-xs text-slate-500">Based on latest verified gate transactions</p></div>
             <Activity className="h-4 w-4 text-[var(--color-brand-green)]" />
           </div>
           <div className="space-y-4">
             <div className="rounded-2xl bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-[0.16em] text-[var(--color-secondary-text)]">Inside campus</p>
-              <p className="mt-2 text-3xl font-bold">{metrics.inside}</p>
+              {loading ? <div className="mt-2 h-9 w-16 animate-pulse rounded-lg bg-slate-200"/> : <p className="mt-2 text-3xl font-bold">{metrics.inside}</p>}
             </div>
-            <div className="rounded-2xl bg-slate-50 p-3">
-              <p className="text-xs uppercase tracking-[0.16em] text-[var(--color-secondary-text)]">Outside campus</p>
-              <p className="mt-2 text-3xl font-bold">{Math.max(0, metrics.students + metrics.teachers - metrics.inside)}</p>
-            </div>
-            <div className="rounded-2xl bg-sky-50 p-3">
+            <div className="rounded-2xl bg-gradient-to-r from-blue-50 to-cyan-50 p-3">
               <p className="text-xs uppercase tracking-[0.16em] text-[var(--color-secondary-text)]">Visitors inside</p>
-              <p className="mt-2 text-3xl font-bold text-sky-700">{metrics.visitors}</p>
+              {loading ? <div className="mt-2 h-9 w-16 animate-pulse rounded-lg bg-sky-100"/> : <p className="mt-2 text-3xl font-bold text-blue-700">{metrics.visitors}</p>}
             </div>
           </div>
         </section>
@@ -1068,7 +1046,7 @@ function AdminOverview() {
               <button onClick={() => void exportAttendanceReport('pdf')}>PDF</button>
             </span>
           </div>
-          <div className="overflow-hidden rounded-2xl border border-[var(--color-border)]">
+          <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)]">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-[var(--color-secondary-text)]">
                 <tr>
@@ -1096,7 +1074,7 @@ function AdminOverview() {
         <section className="rounded-[28px] border border-[var(--color-border)] bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-[var(--font-display)] text-xl font-bold">Pending approvals</h3>
-            <button className="text-sm font-semibold text-[var(--color-brand-dark)]">Review</button>
+            <button onClick={() => navigate('/administrator/requests')} className="text-sm font-semibold text-[var(--color-brand-dark)]">Review</button>
           </div>
           <div className="space-y-3">
             {requests.map((request) => (
