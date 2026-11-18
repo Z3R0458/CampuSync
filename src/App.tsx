@@ -1,6 +1,13 @@
 import {
   Activity,
   ArrowRight,
+  Download,
+  Share,
+  CircleCheck,
+  Smartphone,
+  Tablet,
+  Monitor,
+  X,
   Bell,
   Clock3,
   BookOpen,
@@ -66,6 +73,32 @@ const roleMeta = [
   { id: 'teacher', label: 'Teacher', path: '/teacher', icon: UserCog },
   { id: 'parent', label: 'Parent', path: '/parent', icon: Users },
 ] as const
+
+type BrowserDeviceInfo = { deviceType: string; operatingSystem: string; operatingSystemVersion: string; browser: string; browserVersion: string; deviceModel: string; screenCategory: string }
+async function collectBrowserDeviceInfo(): Promise<BrowserDeviceInfo> {
+  const nav = navigator as Navigator & { userAgentData?: { mobile?: boolean; platform?: string; brands?: Array<{ brand: string; version: string }>; getHighEntropyValues?: (hints: string[]) => Promise<{ platformVersion?: string; model?: string; fullVersionList?: Array<{ brand: string; version: string }> }> } }
+  const ua = navigator.userAgent
+  const iPad = /iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)
+  const android = /Android/i.test(ua) || /Android/i.test(nav.userAgentData?.platform ?? '')
+  const mobile = /iPhone|iPod|Mobile/i.test(ua) || nav.userAgentData?.mobile === true
+  let os = iPad ? 'iPadOS' : /iPhone|iPod/i.test(ua) ? 'iOS' : android ? 'Android' : /Windows/i.test(ua) ? 'Windows' : /Macintosh|Mac OS/i.test(ua) ? 'macOS' : /CrOS/i.test(ua) ? 'ChromeOS' : /Linux/i.test(ua) ? 'Linux' : 'Unknown'
+  let osVersion = iPad ? '' : (ua.match(/(?:Windows NT|Android|iPhone OS|CPU OS|Mac OS X) ([\d._]+)/i)?.[1] ?? '').replaceAll('_', '.')
+  let model = ''
+  let browser = /SamsungBrowser\//i.test(ua) ? 'Samsung Internet' : /Edg\//i.test(ua) ? 'Edge' : /OPR\//i.test(ua) ? 'Opera' : /Firefox\//i.test(ua) ? 'Firefox' : /CriOS\//i.test(ua) ? 'Chrome' : /FxiOS\//i.test(ua) ? 'Firefox' : /Chrome\//i.test(ua) ? 'Chrome' : /Safari\//i.test(ua) ? 'Safari' : 'Unknown'
+  let browserVersion = ua.match(/(?:Edg|SamsungBrowser|OPR|Firefox|CriOS|FxiOS|Chrome|Version)\/([\d.]+)/i)?.[1] ?? ''
+  try {
+    const hints = await nav.userAgentData?.getHighEntropyValues?.(['platformVersion', 'model', 'fullVersionList'])
+    if (hints?.platformVersion) osVersion = hints.platformVersion
+    if (hints?.model) model = hints.model
+    const brands = hints?.fullVersionList ?? nav.userAgentData?.brands ?? []
+    const match = brands.find(item => /Microsoft Edge|Google Chrome|Chromium|Opera/i.test(item.brand))
+    if (match) { browser = /Edge/i.test(match.brand) ? 'Edge' : /Opera/i.test(match.brand) ? 'Opera' : 'Chrome'; browserVersion = match.version }
+    if (nav.userAgentData?.platform === 'Chrome OS') os = 'ChromeOS'
+  } catch { /* User-Agent Client Hints are optional; use the UA fallback. */ }
+  const tablet = iPad || (/Android/i.test(ua) && !mobile) || /Tablet/i.test(ua)
+  const deviceType = tablet ? 'Tablet' : mobile ? 'Mobile' : /Windows|Macintosh|Mac OS|Linux|CrOS/i.test(ua) ? 'Desktop' : 'Unknown'
+  return { deviceType, operatingSystem: os, operatingSystemVersion: osVersion, browser, browserVersion, deviceModel: model, screenCategory: deviceType }
+}
 
 type ActiveProfile = { id: string; full_name: string; role: (typeof roleMeta)[number]['id']; is_active: boolean; profile_photo_path?: string | null }
 
@@ -168,12 +201,19 @@ function LoginScreen() {
   const deviceIdRef = useRef('')
   const getDeviceIdentifier = () => {
     if (deviceIdRef.current) return deviceIdRef.current
+    const validId = (value: string | null) => value && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(value) ? value : null
     try {
-      const saved = localStorage.getItem('campusync:device-id')
-      const id = saved && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(saved) ? saved : crypto.randomUUID()
+      const saved = validId(localStorage.getItem('campusync:device-id'))
+      const id = saved ?? crypto.randomUUID()
       localStorage.setItem('campusync:device-id', id)
       deviceIdRef.current = id
-    } catch { deviceIdRef.current = crypto.randomUUID() }
+    } catch {
+      try {
+        const saved = validId(sessionStorage.getItem('campusync:device-id'))
+        deviceIdRef.current = saved ?? crypto.randomUUID()
+        sessionStorage.setItem('campusync:device-id', deviceIdRef.current)
+      } catch { deviceIdRef.current = crypto.randomUUID() }
+    }
     return deviceIdRef.current
   }
   useEffect(() => { const timer = window.setInterval(() => setClockNow(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
@@ -186,7 +226,8 @@ function LoginScreen() {
       return
     }
     setSubmitting(true)
-    const { data, error: authError } = await client.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password, deviceIdentifier: getDeviceIdentifier() } })
+    const deviceInfo = await collectBrowserDeviceInfo()
+    const { data, error: authError } = await client.functions.invoke('login-otp', { body: { action: 'start', email: email.trim().toLowerCase(), password, deviceIdentifier: getDeviceIdentifier(), deviceInfo } })
     if (authError) {
       setSubmitting(false)
       setError(await loginFunctionError(authError, data, 'Sign-in could not be completed. Check your email and password, then try again.'))
@@ -205,7 +246,8 @@ function LoginScreen() {
   }
   const verifyCode = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(''); const client = supabase; if (!client || !challenge) return; setSubmitting(true)
-    const { data, error: verifyError } = await client.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code, deviceIdentifier: getDeviceIdentifier() } })
+    const deviceInfo = await collectBrowserDeviceInfo()
+    const { data, error: verifyError } = await client.functions.invoke('login-otp', { body: { action: 'verify', challengeId: challenge.id, code, deviceIdentifier: getDeviceIdentifier(), deviceInfo } })
     if (verifyError || !data?.access_token || !data?.refresh_token) { setSubmitting(false); setError(await loginFunctionError(verifyError, data, 'That code could not be verified. Check it and try again, or request a new one.')); return }
     const { error: sessionError } = await client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
     setSubmitting(false)
@@ -441,6 +483,17 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
   const [supabaseMessage, setSupabaseMessage] = useState('Checking Supabase connection…')
 
   useEffect(() => {
+    const client = supabase
+    if (!client) return
+    const heartbeat = () => { if (document.visibilityState === 'visible' && navigator.onLine) void client.rpc('touch_my_login_activity') }
+    heartbeat()
+    const timer = window.setInterval(heartbeat, 5 * 60_000)
+    document.addEventListener('visibilitychange', heartbeat)
+    window.addEventListener('focus', heartbeat)
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', heartbeat); window.removeEventListener('focus', heartbeat) }
+  }, [])
+
+  useEffect(() => {
     const updateConnection = () => setIsOnline(navigator.onLine)
     window.addEventListener('online', updateConnection)
     window.addEventListener('offline', updateConnection)
@@ -568,6 +621,7 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                     {isOnline ? 'ONLINE' : 'OFFLINE'}
                   </div>
                   <PushNotificationToggle profileId={profile.id} />
+                  <PwaInstallGuide />
                   <button onClick={() => void (async()=>{if(supabase){await supabase.rpc('record_auth_activity',{p_action:'logout'});await supabase.rpc('revoke_my_login_otp_session');await supabase.auth.signOut()}})()} className="flex items-center gap-2 rounded-full bg-[var(--color-brand-dark)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#1d5d45]">
                     <LogOut className="h-4 w-4" />
                     Logout
@@ -610,6 +664,62 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
           </div>
         </div>
   )
+}
+
+type DeferredInstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
+function PwaInstallGuide() {
+  const [deferredPrompt, setDeferredPrompt] = useState<DeferredInstallPrompt | null>(null)
+  const [open, setOpen] = useState(false)
+  const [installed, setInstalled] = useState(false)
+  const [platform, setPlatform] = useState<'android'|'iphone'|'ipad'|'desktop'|'other'>('other')
+  useEffect(() => {
+    const ua = navigator.userAgent
+    const ipad = /iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)
+    setPlatform(ipad ? 'ipad' : /iPhone|iPod/i.test(ua) ? 'iphone' : /Android/i.test(ua) ? 'android' : /Windows|Macintosh|Linux|CrOS/i.test(ua) ? 'desktop' : 'other')
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+    setInstalled(standalone)
+    const relatedApps = navigator as Navigator & { getInstalledRelatedApps?: () => Promise<Array<{ id?: string; platform?: string; url?: string }>> }
+    void relatedApps.getInstalledRelatedApps?.().then(apps => { if (apps.length) setInstalled(true) }).catch(() => undefined)
+    const onPrompt = (event: Event) => { event.preventDefault(); setDeferredPrompt(event as DeferredInstallPrompt) }
+    const onInstalled = () => { setInstalled(true); setDeferredPrompt(null) }
+    window.addEventListener('beforeinstallprompt', onPrompt)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => { window.removeEventListener('beforeinstallprompt', onPrompt); window.removeEventListener('appinstalled', onInstalled) }
+  }, [])
+
+  const install = async () => {
+    if (!deferredPrompt) { setOpen(true); return }
+    await deferredPrompt.prompt()
+    const result = await deferredPrompt.userChoice
+    if (result.outcome === 'accepted') setInstalled(true)
+    setDeferredPrompt(null)
+    if (result.outcome !== 'accepted') setOpen(true)
+  }
+  const steps = platform === 'iphone'
+    ? ['Open this site in Safari.', 'Tap the Share button.', 'Choose “Add to Home Screen”.', 'Tap Add, then launch CampuSync from the new icon.']
+    : platform === 'ipad'
+      ? ['Open this site in Safari on your iPad.', 'Tap Share in the browser toolbar.', 'Choose “Add to Home Screen”.', 'Confirm the name and icon, tap Add, then open the new icon.']
+      : platform === 'android'
+        ? ['Open CampuSync in Chrome or another supported browser.', 'Use Install CampuSync when the browser offers it.', 'If unavailable, open the browser menu and choose “Install app” or “Add to Home screen”.', 'Confirm installation and launch it from your home screen.']
+        : ['Open CampuSync in Chrome or Edge over HTTPS.', 'Select Install CampuSync in the address bar or browser menu.', 'Confirm the installation.', 'Open CampuSync from the installed app shortcut.']
+  const PlatformIcon = platform === 'iphone' || platform === 'android' ? Smartphone : platform === 'ipad' ? Tablet : Monitor
+  return <>
+    <button type="button" onClick={() => void install()} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:border-blue-200 hover:text-blue-800">
+      {installed ? <CircleCheck className="h-4 w-4 text-emerald-700"/> : <Download className="h-4 w-4 text-blue-700"/>}{installed ? 'App installed' : deferredPrompt ? 'Install CampuSync' : 'Install app'}
+    </button>
+    {open && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4" onClick={() => setOpen(false)}>
+      <section role="dialog" aria-modal="true" aria-labelledby="pwa-install-title" onClick={event => event.stopPropagation()} className="cs-page-enter max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-white/70 bg-white p-5 shadow-2xl sm:p-7">
+        <header className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><span className="rounded-2xl bg-blue-50 p-3 text-blue-800"><PlatformIcon className="h-6 w-6"/></span><div><p className="text-xs font-bold uppercase tracking-widest text-teal-700">CampuSync PWA</p><h2 id="pwa-install-title" className="text-xl font-bold text-slate-900">{installed ? 'CampuSync is installed' : 'Install CampuSync'}</h2></div></div><button onClick={() => setOpen(false)} aria-label="Close installation guide" className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5"/></button></header>
+        {installed ? <p className="mt-5 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-900">This CampuSync session is running as an installed app. You can close this guide and continue.</p> : <>
+          <p className="mt-4 text-sm leading-6 text-slate-600">Install this website on your device for quick access. CampuSync remains a web app; no app store is required.</p>
+          {deferredPrompt && <button onClick={() => void install()} className="cs-primary mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold text-white"><Download className="h-4 w-4"/>Install now</button>}
+          <div className="mt-5 space-y-2">{steps.map((step,index)=><div key={step} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-700 to-teal-500 text-xs font-bold text-white">{index+1}</span><p className="pt-1 text-sm leading-5 text-slate-700">{step}</p>{(platform==='iphone'||platform==='ipad')&&index===1&&<Share className="mt-1 h-4 w-4 shrink-0 text-blue-700"/>}</div>)}</div>
+          <p className="mt-4 text-xs leading-5 text-slate-500">If the install option is missing, confirm you are using HTTPS and a supported browser. Browser menus and install support vary by platform. iOS and iPadOS use Safari’s Share menu rather than the Android install prompt.</p>
+        </>}
+        <button onClick={() => setOpen(false)} className="mt-5 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Close</button>
+      </section>
+    </div>}
+  </>
 }
 
 function DashboardShell({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {

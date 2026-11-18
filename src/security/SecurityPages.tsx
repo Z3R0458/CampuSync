@@ -6,6 +6,7 @@ import { friendlyError } from '../components/UserFeedback'
 type Profile = { id: string; full_name: string; role: string }
 type Device = {
   id: string; device_identifier: string; device_name: string; device_type: string; operating_system: string
+  operating_system_version?: string | null; device_model?: string | null; screen_category?: string | null
   browser: string; browser_version: string | null; first_seen_at: string; last_seen_at: string; is_recognized: boolean
 }
 type Login = {
@@ -38,6 +39,10 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [historyScope, setHistoryScope] = useState('all')
+  const [historyDevice, setHistoryDevice] = useState('all')
+  const [historyFrom, setHistoryFrom] = useState('')
+  const [historyTo, setHistoryTo] = useState('')
 
   const refresh = useCallback(async () => {
     if (!supabase) return
@@ -45,7 +50,7 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
     setError('')
     const [{ data: auth }, devicesResult, loginResult, sessionsResult, alertsResult] = await Promise.all([
       supabase.auth.getSession(),
-      supabase.from('user_devices').select('id,device_identifier,device_name,device_type,operating_system,browser,browser_version,first_seen_at,last_seen_at,is_recognized').order('last_seen_at', { ascending: false }).limit(100),
+      supabase.from('user_devices').select('id,device_identifier,device_name,device_type,operating_system,operating_system_version,device_model,screen_category,browser,browser_version,first_seen_at,last_seen_at,is_recognized').order('last_seen_at', { ascending: false }).limit(100),
       supabase.from('login_activity').select('id,profile_id,device_id,session_id,ip_address,approximate_location,login_at,logout_at,last_activity_at,login_status,is_new_device,email_delivery_status,email_delivery_attempts').order('login_at', { ascending: false }).limit(100),
       supabase.from('login_otp_verified_sessions').select('session_id,verified_at,expires_at,revoked_at').order('verified_at', { ascending: false }).limit(100),
       supabase.from('notifications').select('id,payload,created_at,is_read').eq('type', 'security_new_device').order('created_at', { ascending: false }).limit(20),
@@ -68,18 +73,30 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
-  useEffect(() => {
-    const client = supabase
-    if (!client) return
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void client.rpc('touch_my_login_activity')
-    }, 5 * 60_000)
-    return () => window.clearInterval(timer)
-  }, [])
-
   const deviceById = useMemo(() => new Map(devices.map(device => [device.id, device])), [devices])
   const currentDevice = devices.find(device => device.device_identifier === currentDeviceIdentifier)
   const activeSessions = sessions.filter(session => !session.revoked_at && Date.parse(session.expires_at) > Date.now())
+  const sessionStatus = (login: Login) => {
+    const session = sessions.find(item => item.session_id === login.session_id)
+    if (login.login_status === 'SIGNED_OUT') return 'Logged out'
+    if (login.login_status === 'REVOKED' || session?.revoked_at) return 'Revoked'
+    if (login.login_status === 'EXPIRED' || (session && Date.parse(session.expires_at) <= Date.now())) return 'Expired'
+    if (login.login_status === 'UNKNOWN') return 'Status unknown'
+    if (Date.now() - Date.parse(login.last_activity_at) > 30 * 60_000) return 'Connection status unknown'
+    return 'Active'
+  }
+  const visibleHistory = logins.filter(login => {
+    const session = sessions.find(item => item.session_id === login.session_id)
+    const isActive = !session?.revoked_at && Boolean(session && Date.parse(session.expires_at) > Date.now()) && !login.logout_at
+    const device = login.device_id ? deviceById.get(login.device_id) : undefined
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(login.login_at))
+    if (historyScope === 'current' && !isActive) return false
+    if (historyScope === 'previous' && isActive) return false
+    if (historyDevice !== 'all' && device?.device_type !== historyDevice) return false
+    if (historyFrom && date < historyFrom) return false
+    if (historyTo && date > historyTo) return false
+    return true
+  })
 
   const revoke = async (sessionId: string) => {
     if (!supabase || !window.confirm('Sign out this other session? It will lose access to CampuSync data.')) return
@@ -127,6 +144,8 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
       {loading ? <p className="mt-4 text-sm text-slate-500">Loading device information…</p> : currentDevice ? <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <p className="flex items-center gap-2"><DeviceIcon type={currentDevice.device_type}/><b>{currentDevice.device_name}</b><span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">Current</span></p>
         <p>First seen: {dateTime(currentDevice.first_seen_at)}</p><p>Last seen: {dateTime(currentDevice.last_seen_at)}</p>
+        <p>System: {currentDevice.operating_system}{currentDevice.operating_system_version ? ` ${currentDevice.operating_system_version}` : ''}</p><p>Browser: {currentDevice.browser}{currentDevice.browser_version ? ` ${currentDevice.browser_version}` : ''}</p>
+        {currentDevice.device_model && <p>Model: {currentDevice.device_model}</p>}
         <p>Location: not available</p><p>Browser ID: {currentDevice.is_recognized ? 'Recognized' : 'Not recognized'}</p><p>Session: {activeSessions.some(session => session.session_id === currentSessionId) ? 'Active' : 'Not listed'}</p>
       </div> : <p className="mt-4 text-sm text-slate-500">This device has not been recorded yet. It will appear after your next successful sign-in.</p>}
     </section>
@@ -142,8 +161,9 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
         </article>
       })}</div> : <p className="mt-4 text-sm text-slate-500">No active sessions were returned.</p>}
     </section>
-    <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex items-center gap-2"><ShieldAlert className="h-5 w-5 text-emerald-800"/><div><h2 className="font-bold">Recent login activity</h2><p className="text-sm text-slate-500">Times are shown in Asia/Manila.</p></div></div>
-      {loading ? <p className="mt-4 text-sm text-slate-500">Loading activity…</p> : logins.length ? <div className="mt-4 divide-y">{logins.map(login => { const device = login.device_id ? deviceById.get(login.device_id) : undefined; return <article key={login.id} className="grid gap-2 py-4 text-sm md:grid-cols-[1fr_auto]"><div><p className="flex items-center gap-2 font-semibold"><DeviceIcon type={device?.device_type ?? 'Unknown'}/>{device?.device_name ?? 'Unknown device'}{login.is_new_device && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900">New device</span>}</p><p className="mt-1 text-slate-600">{device?.browser ?? 'Browser unavailable'} {device?.browser_version ?? ''} · {device?.operating_system ?? 'System unavailable'}</p><p className="mt-1 flex items-center gap-1 text-xs text-slate-500"><MapPin className="h-3.5 w-3.5"/>{login.approximate_location ?? 'Location not available'} · IP {shortIp(login.ip_address)}</p></div><div className="text-xs text-slate-600 md:text-right"><p>{dateTime(login.login_at)}</p><p className="mt-1">{login.session_id === currentSessionId ? 'Current session' : login.login_status.replaceAll('_',' ')}</p>{login.is_new_device && <p className="mt-1">Email alert: {login.email_delivery_status ?? 'Pending'}</p>}</div></article> })}</div> : <p className="mt-4 text-sm text-slate-500">No login records are available yet.</p>}
+    <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex items-center gap-2"><ShieldAlert className="h-5 w-5 text-emerald-800"/><div><h2 className="font-bold">Recent login activity</h2><p className="text-sm text-slate-500">Times are shown in Asia/Manila. Missing logout time means it was not confirmed.</p></div></div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4"><select aria-label="Filter sessions" value={historyScope} onChange={e=>setHistoryScope(e.target.value)} className="rounded-xl border bg-white px-3 py-2 text-sm"><option value="all">All activity</option><option value="current">Current sessions</option><option value="previous">Previous sessions</option></select><select aria-label="Filter device type" value={historyDevice} onChange={e=>setHistoryDevice(e.target.value)} className="rounded-xl border bg-white px-3 py-2 text-sm"><option value="all">All device types</option>{['Mobile','Tablet','Desktop','Unknown'].map(type=><option key={type}>{type}</option>)}</select><label className="text-xs text-slate-500">From<input type="date" value={historyFrom} onChange={e=>setHistoryFrom(e.target.value)} className="mt-1 block w-full rounded-xl border px-3 py-2 text-sm"/></label><label className="text-xs text-slate-500">To<input type="date" value={historyTo} onChange={e=>setHistoryTo(e.target.value)} className="mt-1 block w-full rounded-xl border px-3 py-2 text-sm"/></label></div>
+      {loading ? <p className="mt-4 text-sm text-slate-500">Loading activity…</p> : visibleHistory.length ? <div className="mt-4 divide-y">{visibleHistory.map(login => { const device = login.device_id ? deviceById.get(login.device_id) : undefined; return <article key={login.id} className="grid gap-2 py-4 text-sm md:grid-cols-[1fr_auto]"><div><p className="flex items-center gap-2 font-semibold"><DeviceIcon type={device?.device_type ?? 'Unknown'}/>{device?.device_name ?? 'Unknown device'}{login.is_new_device && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900">New device</span>}</p><p className="mt-1 text-slate-600">{device?.browser ?? 'Browser unavailable'} {device?.browser_version ?? ''} · {device?.operating_system ?? 'System unavailable'}{device?.operating_system_version ? ` ${device.operating_system_version}` : ''}</p><p className="mt-1 flex items-center gap-1 text-xs text-slate-500"><MapPin className="h-3.5 w-3.5"/>{login.approximate_location ?? 'Location not available'} · IP {shortIp(login.ip_address)}</p><p className="mt-1 text-xs text-slate-600">Logged out: {dateTime(login.logout_at)} · Last activity: {dateTime(login.last_activity_at)}</p></div><div className="text-xs text-slate-600 md:text-right"><p>{dateTime(login.login_at)}</p><p className="mt-1 font-semibold">{login.session_id === currentSessionId ? 'Current device · ' : ''}{sessionStatus(login)}</p>{login.is_new_device && <p className="mt-1">Email alert: {login.email_delivery_status ?? 'Pending'}</p>}</div></article> })}</div> : <p className="mt-4 text-sm text-slate-500">No login records match these filters.</p>}
     </section>
     <section className="rounded-2xl border bg-white p-5 shadow-sm"><h2 className="font-bold">Recognized devices</h2><p className="mt-1 text-sm text-slate-500">Forget a device to make its next sign-in count as a new device.</p>
       {devices.length ? <div className="mt-3 divide-y">{devices.map(device => <div key={device.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><p className="flex items-center gap-2 text-sm font-semibold"><DeviceIcon type={device.device_type}/>{device.device_name}{device.device_identifier === currentDeviceIdentifier && <span className="text-xs text-emerald-800">This browser</span>}</p><p className="mt-1 text-xs text-slate-500">First seen {dateTime(device.first_seen_at)} · Last seen {dateTime(device.last_seen_at)}</p></div><button onClick={() => void setRecognized(device)} disabled={busy !== ''} className="rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-50">{device.is_recognized ? 'Forget device' : 'Recognize device'}</button></div>)}</div> : <p className="mt-3 text-sm text-slate-500">No recognized devices yet.</p>}
@@ -154,7 +174,7 @@ export function SecurityLoginActivity({ profile }: { profile: Profile }) {
 
 export function AdminLoginMonitoring() {
   const [rows, setRows] = useState<Login[]>([])
-  const [profiles, setProfiles] = useState<Map<string, { full_name: string; email: string; role: string }>>(new Map())
+  const [profiles, setProfiles] = useState<Map<string, { id: string; auth_user_id: string; full_name: string; email: string; role: string }>>(new Map())
   const [devices, setDevices] = useState<Map<string, Device>>(new Map())
   const [events, setEvents] = useState<AuthEvent[]>([])
   const [search, setSearch] = useState('')
@@ -177,7 +197,7 @@ export function AdminLoginMonitoring() {
     const deviceIds = [...new Set(activityRows.map(row => row.device_id).filter(Boolean))] as string[]
     const [profileResult, deviceResult] = await Promise.all([
       profileIds.length ? supabase.from('profiles').select('id,auth_user_id,full_name,email,role').in('id', profileIds) : Promise.resolve({ data: [], error: null }),
-      deviceIds.length ? supabase.from('user_devices').select('id,device_identifier,device_name,device_type,operating_system,browser,browser_version,first_seen_at,last_seen_at,is_recognized').in('id', deviceIds) : Promise.resolve({ data: [], error: null }),
+      deviceIds.length ? supabase.from('user_devices').select('id,device_identifier,device_name,device_type,operating_system,operating_system_version,device_model,screen_category,browser,browser_version,first_seen_at,last_seen_at,is_recognized').in('id', deviceIds) : Promise.resolve({ data: [], error: null }),
     ])
     if (loginResult.error || eventResult.error || profileResult.error || deviceResult.error) setError(friendlyError(loginResult.error ?? eventResult.error ?? profileResult.error ?? deviceResult.error))
     setRows(activityRows)
@@ -192,7 +212,7 @@ export function AdminLoginMonitoring() {
     const profile = profiles.get(row.profile_id)
     const device = row.device_id ? devices.get(row.device_id) : undefined
     const query = search.trim().toLowerCase()
-    if (query && !`${profile?.full_name ?? ''} ${profile?.email ?? ''} ${profile?.role ?? ''}`.toLowerCase().includes(query)) return false
+    if (query && !`${profile?.full_name ?? ''} ${profile?.email ?? ''} ${profile?.role ?? ''} ${profile?.auth_user_id ?? ''}`.toLowerCase().includes(query)) return false
     if (roleFilter !== 'all' && profile?.role !== roleFilter) return false
     if (deviceFilter !== 'all' && device?.device_type !== deviceFilter) return false
     if (fromDate && row.login_at.slice(0,10) < fromDate) return false

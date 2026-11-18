@@ -47,22 +47,31 @@ async function makeCode() {
   }
 }
 function parseDevice(userAgent: string) {
-  const deviceType = /ipad|tablet|playbook|silk/i.test(userAgent) ? 'Tablet' : /mobile|iphone|ipod|android.*mobile/i.test(userAgent) ? 'Mobile' : 'Desktop'
+  const isIPad = /iPad/i.test(userAgent) || (/Macintosh/i.test(userAgent) && /Mobile\//i.test(userAgent))
+  const isTablet = isIPad || /tablet|playbook|silk/i.test(userAgent) || (/Android/i.test(userAgent) && !/mobile/i.test(userAgent))
+  const deviceType = isTablet ? 'Tablet' : /mobile|iphone|ipod/i.test(userAgent) || /Android/i.test(userAgent) ? 'Mobile' : /Windows|Macintosh|Mac OS X|X11|Linux/i.test(userAgent) ? 'Desktop' : 'Unknown'
+  const osMatch = userAgent.match(/Windows NT ([\d.]+)/i) ?? userAgent.match(/Android ([\d.]+)/i) ?? userAgent.match(/(?:iPhone OS|CPU OS) ([\d_]+)/i) ?? userAgent.match(/Mac OS X ([\d_]+)/i) ?? userAgent.match(/CrOS [^ ]+ ([\d.]+)/i)
   const operatingSystem = /Windows NT/i.test(userAgent) ? 'Windows'
     : /Android/i.test(userAgent) ? 'Android'
-    : /iPhone|iPad|iPod/i.test(userAgent) ? 'iOS'
-    : /Mac OS X/i.test(userAgent) ? 'macOS'
-    : /Linux/i.test(userAgent) ? 'Linux' : 'Unknown'
+    : isIPad ? 'iPadOS'
+    : /iPhone|iPod/i.test(userAgent) ? 'iOS'
+    : /Mac OS X|Macintosh/i.test(userAgent) ? 'macOS'
+    : /CrOS/i.test(userAgent) ? 'ChromeOS'
+    : /Linux|X11/i.test(userAgent) ? 'Linux' : 'Unknown'
   const browserMatch = userAgent.match(/Edg\/([\d.]+)/) ? ['Edge', userAgent.match(/Edg\/([\d.]+)/)![1]]
+    : userAgent.match(/SamsungBrowser\/([\d.]+)/) ? ['Samsung Internet', userAgent.match(/SamsungBrowser\/([\d.]+)/)![1]]
     : userAgent.match(/OPR\/([\d.]+)/) ? ['Opera', userAgent.match(/OPR\/([\d.]+)/)![1]]
     : userAgent.match(/Firefox\/([\d.]+)/) ? ['Firefox', userAgent.match(/Firefox\/([\d.]+)/)![1]]
     : userAgent.match(/Chrome\/([\d.]+)/) ? ['Chrome', userAgent.match(/Chrome\/([\d.]+)/)![1]]
     : userAgent.match(/Version\/([\d.]+).*Safari/) ? ['Safari', userAgent.match(/Version\/([\d.]+).*Safari/)![1]]
     : ['Unknown', '']
-  return { deviceType, operatingSystem, browser: browserMatch[0], browserVersion: browserMatch[1] }
+  return { deviceType, operatingSystem, operatingSystemVersion: osMatch?.[1]?.replaceAll('_', '.') ?? '', browser: browserMatch[0], browserVersion: browserMatch[1], deviceModel: '', screenCategory: deviceType }
 }
 function safeDeviceIdentifier(value: unknown) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27,40}$/i.test(value) ? value : crypto.randomUUID()
+}
+function safeLabel(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value.trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 80) : fallback
 }
 
 Deno.serve(async request => {
@@ -95,9 +104,22 @@ Deno.serve(async request => {
       })
     } catch { /* Audit insertion is best-effort and never changes authentication results. */ }
   }
-  const recordSuccessfulLogin = async (authUserId: string, email: string, sessionId: string, deviceIdentifier: string) => {
+  const recordSuccessfulLogin = async (authUserId: string, email: string, sessionId: string, deviceIdentifier: string, currentDeviceInfo: unknown) => {
     const ua = request.headers.get('user-agent') ?? ''
-    const device = parseDevice(ua)
+    const parsedUa = parseDevice(ua)
+    const supplied = (inputDeviceInfo: unknown) => inputDeviceInfo && typeof inputDeviceInfo === 'object' ? inputDeviceInfo as Record<string, unknown> : {}
+    const clientDevice = supplied(currentDeviceInfo)
+    const allowedTypes = ['Desktop','Laptop','Tablet','Mobile','Unknown']
+    const device = {
+      ...parsedUa,
+      deviceType: allowedTypes.includes(String(clientDevice.deviceType)) ? String(clientDevice.deviceType) : parsedUa.deviceType,
+      operatingSystem: safeLabel(clientDevice.operatingSystem, parsedUa.operatingSystem),
+      operatingSystemVersion: safeLabel(clientDevice.operatingSystemVersion, parsedUa.operatingSystemVersion),
+      browser: safeLabel(clientDevice.browser, parsedUa.browser),
+      browserVersion: safeLabel(clientDevice.browserVersion, parsedUa.browserVersion),
+      deviceModel: safeLabel(clientDevice.deviceModel, ''),
+      screenCategory: allowedTypes.includes(String(clientDevice.screenCategory)) ? String(clientDevice.screenCategory) : parsedUa.screenCategory,
+    }
     const trustedIp = request.headers.get('cf-connecting-ip')?.trim() ?? ''
     const ipAddress = /^[0-9a-f:.]+$/i.test(trustedIp) ? trustedIp : ''
     const { data: activityRows, error: activityError } = await db.rpc('record_login_activity', {
@@ -107,6 +129,7 @@ Deno.serve(async request => {
     })
     const activity = Array.isArray(activityRows) ? activityRows[0] : null
     if (activityError || !activity?.activity_id) return { error: activityError ?? new Error('Login activity was not recorded.') }
+    await admin.from('user_devices').update({ operating_system_version: device.operatingSystemVersion || null, device_model: device.deviceModel || null, screen_category: device.screenCategory }).eq('id', activity.device_id)
 
     if (activity.is_new_device === true) {
       const title = 'New device signed in to CampuSync'
@@ -215,7 +238,7 @@ Deno.serve(async request => {
       }, { onConflict: 'session_id' })
       if (sessionWriteError) return respond(origin, { error: 'Your verified session could not be prepared. Please try again.' }, 503)
       const deviceIdentifier = safeDeviceIdentifier(input.deviceIdentifier)
-      const tracked = await recordSuccessfulLogin(authUserId, registeredEmail, sessionId, deviceIdentifier)
+      const tracked = await recordSuccessfulLogin(authUserId, registeredEmail, sessionId, deviceIdentifier, input.deviceInfo)
       if (tracked.error) {
         await admin.from('login_otp_verified_sessions').update({ revoked_at: new Date().toISOString() }).eq('session_id', sessionId)
         console.error('Successful login activity could not be recorded', { code: (tracked.error as { code?: string }).code ?? 'unknown' })
@@ -367,7 +390,7 @@ Deno.serve(async request => {
     }
     const session = await refreshed.json()
     const deviceIdentifier = safeDeviceIdentifier(input.deviceIdentifier)
-    const tracked = await recordSuccessfulLogin(result.auth_user_id, result.email, issuedSessionId, deviceIdentifier)
+    const tracked = await recordSuccessfulLogin(result.auth_user_id, result.email, issuedSessionId, deviceIdentifier, input.deviceInfo)
     if (tracked.error) {
       await admin.from('login_otp_verified_sessions').update({ revoked_at: new Date().toISOString() }).eq('session_id', issuedSessionId)
       console.error('Verified login activity could not be recorded', { code: (tracked.error as { code?: string }).code ?? 'unknown' })
