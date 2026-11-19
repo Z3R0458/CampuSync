@@ -67,6 +67,7 @@ export function SetPasswordPage() {
     try {
       await invoke({ action: 'password-reset-complete', resetToken, password })
       setStage('done')
+      await supabase?.auth.signOut()
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not update the password.') }
     finally { setBusy(false) }
   }

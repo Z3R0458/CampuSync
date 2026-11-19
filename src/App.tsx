@@ -303,11 +303,11 @@ function ParentRegistrationScreen() {
 
 function AuthGate() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [profile, setProfile] = useState<ActiveProfile | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
   const [profileError, setProfileError] = useState('')
-  const [passwordRecovery, setPasswordRecovery] = useState(false)
 
   useEffect(() => {
     if (!supabase) {
@@ -320,7 +320,10 @@ function AuthGate() {
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
-      setPasswordRecovery(event === 'PASSWORD_RECOVERY')
+      if (event === 'PASSWORD_RECOVERY') {
+        navigate('/set-password', { replace: true })
+        void supabase?.auth.signOut()
+      }
       setProfile(null)
       setProfileError('')
     })
@@ -328,7 +331,7 @@ function AuthGate() {
       active = false
       subscription.unsubscribe()
     }
-  }, [])
+  }, [navigate])
 
   useEffect(() => {
     const client = supabase
@@ -337,7 +340,6 @@ function AuthGate() {
       setProfileLoading(false)
       return
     }
-    if (passwordRecovery) { setProfile(null); setProfileLoading(false); return }
     let active = true
     setProfileLoading(true)
     const loadProfile = async () => {
@@ -395,7 +397,7 @@ function AuthGate() {
     }
     void validateSessionAndLoad()
     return () => { active = false }
-  }, [session, passwordRecovery])
+  }, [session])
 
   if (!isSupabaseConfigured || !supabase) {
     return <main className="mx-auto mt-20 max-w-xl rounded-3xl bg-white p-8 text-center shadow"><h1 className="text-2xl font-bold">Supabase configuration required</h1><p className="mt-3 text-sm text-slate-600">Set the project URL and publishable key in .env.local, then restart Vite.</p></main>
@@ -405,30 +407,10 @@ function AuthGate() {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-600">Loading CampuSync securely…</main>
   }
   if (!session) return location.pathname === '/parent/register' ? <ParentRegistrationScreen /> : location.pathname === '/student-registration' ? <StudentRegistration /> : <LoginScreen />
-  if (passwordRecovery) return <PasswordRecoveryScreen onComplete={() => { setPasswordRecovery(false); void supabase?.auth.signOut() }} />
   if (profileError || !profile) {
     return <main className="mx-auto mt-20 max-w-xl rounded-3xl bg-white p-8 text-center shadow"><h1 className="text-2xl font-bold">School account not provisioned</h1><p role="alert" className="mt-3 text-sm text-red-700">{profileError || 'No active profile is linked to this account.'}</p><button onClick={() => void supabase?.auth.signOut()} className="mt-6 rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white">Sign out</button></main>
   }
   return <DashboardApp profile={profile} onPhotoSaved={path=>setProfile(current=>current?{...current,profile_photo_path:path}:current)} />
-}
-
-function PasswordRecoveryScreen({ onComplete }: { onComplete: () => void }) {
-  const [password, setPassword] = useState('')
-  const [confirmation, setConfirmation] = useState('')
-  const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState(false)
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (password.length < 12) { setMessage('Use at least 12 characters.'); return }
-    if (password !== confirmation) { setMessage('The passwords do not match.'); return }
-    if (!supabase) return
-    setBusy(true)
-    const { error } = await supabase.auth.updateUser({ password })
-    setBusy(false)
-    if (error) setMessage(friendlyError(error))
-    else { setMessage('Password updated.'); onComplete() }
-  }
-  return <main className="flex min-h-screen items-center justify-center bg-slate-50 p-5"><form onSubmit={(e)=>void submit(e)} className="w-full max-w-md space-y-4 rounded-3xl border bg-white p-7 shadow"><h1 className="text-2xl font-bold">Set a new password</h1><p className="text-sm text-slate-600">Choose a new password for your CampuSync account at Valencia NHS.</p><label className="block text-sm font-semibold">New password<input required minLength={12} type="password" autoComplete="new-password" value={password} onChange={(e)=>setPassword(e.target.value)} className="mt-1 w-full rounded-xl border p-3"/></label><label className="block text-sm font-semibold">Confirm password<input required minLength={12} type="password" autoComplete="new-password" value={confirmation} onChange={(e)=>setConfirmation(e.target.value)} className="mt-1 w-full rounded-xl border p-3"/></label>{message&&<p role="status" className="text-sm text-rose-700">{message}</p>}<button disabled={busy} className="w-full rounded-xl bg-[var(--color-brand-dark)] p-3 font-semibold text-white">{busy?'Updating…':'Update password'}</button></form></main>
 }
 
 function RoleRoute({ profile, role, children }: { profile: ActiveProfile; role: ActiveProfile['role']; children: ReactNode }) {
