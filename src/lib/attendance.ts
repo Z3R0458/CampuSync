@@ -293,8 +293,21 @@ export async function getGuardStudentSnapshot(studentId: string) {
 export async function previewGuardQr(qrToken: string) {
   if (!supabase || !navigator.onLine) throw new Error('QR identity checks require a live connection. Offline scans use the limited device cache.')
   const { data, error } = await supabase.rpc('preview_guard_qr', { p_qr_token: qrToken })
-  if (error) throw new Error(error.message)
-  if (!data) throw new Error('QR code is invalid, revoked, or expired.')
+  if (error) {
+    const message = error.message.toLowerCase()
+    if (error.code === 'PGRST202' || message.includes('preview_guard_qr') && message.includes('schema cache')) {
+      throw new Error('QR verification is not set up on this Supabase project yet. Apply the profile photo and QR preview migrations, then refresh the app.')
+    }
+    if (error.code === '42501') throw new Error('Only an active Security Guard account can verify student QR codes. Sign in again if your guard account was just updated.')
+    if (error.code === '22023' || message.includes('invalid, revoked, expired')) {
+      throw new Error('This QR is invalid, was replaced, or belongs to an inactive account. Ask the student to open their dashboard and show their current QR code.')
+    }
+    if (message.includes('gen_random_bytes') || message.includes('digest') || message.includes('function') && message.includes('does not exist')) {
+      throw new Error('The Supabase QR functions are out of date. Apply the QR credential and profile photo migrations, then try again.')
+    }
+    throw new Error(`QR verification failed: ${error.message}`)
+  }
+  if (!data) throw new Error('This QR is invalid, was replaced, or belongs to an inactive account. Ask the student to show their current QR code.')
   return data as Record<string, unknown>
 }
 
