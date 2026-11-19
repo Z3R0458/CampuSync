@@ -52,12 +52,6 @@ Deno.serve(async (request) => {
   if (authError || !authData.user) return respond({ error: 'Session is invalid or expired.' }, 401)
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
-  let claims: Record<string, unknown>
-  try { claims = JSON.parse(atob(token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/'))) as Record<string, unknown> } catch { return respond({ error: 'Email verification is required.' }, 403) }
-  const sessionId = typeof claims.session_id === 'string' ? claims.session_id : ''
-  const { data: verifiedSession } = await admin.from('login_otp_verified_sessions').select('session_id')
-    .eq('session_id', sessionId).eq('auth_user_id', authData.user.id).is('revoked_at', null).gt('expires_at', new Date().toISOString()).maybeSingle()
-  if (!verifiedSession) return respond({ error: 'Email verification is required.' }, 403)
   const { data: caller, error: callerError } = await admin.from('profiles')
     .select('id,full_name,email,role,is_active').eq('auth_user_id', authData.user.id).maybeSingle()
   if (callerError || caller?.role !== 'administrator' || !caller.is_active) return respond({ error: 'Administrator permission is required.' }, 403)
