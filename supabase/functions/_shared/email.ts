@@ -8,12 +8,27 @@ type EmailMessage = {
   preheader?: string
 }
 
+const PRODUCTION_APP_URL = 'https://campusync-pi.vercel.app'
+
+/** Returns an HTTPS app origin; never let hosted emails point at a local machine. */
+export function getPublicAppUrl() {
+  const configured = Deno.env.get('APP_PUBLIC_URL')?.trim()
+  if (configured) {
+    try {
+      const url = new URL(configured)
+      const localHost = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname.endsWith('.localhost') || url.hostname.endsWith('.local')
+      if (url.protocol === 'https:' && !localHost) return url.origin
+    } catch { /* Use the known production URL when the setting is malformed. */ }
+  }
+  return PRODUCTION_APP_URL
+}
+
 export function escapeEmailHtml(value: string) {
   return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char)
 }
 
 function brandedEmail(message: EmailMessage, brand: string) {
-  const appUrl = Deno.env.get('APP_PUBLIC_URL')
+  const appUrl = getPublicAppUrl()
   let logo = ''
   try {
     const url = appUrl ? new URL(appUrl) : null

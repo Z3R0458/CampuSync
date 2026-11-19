@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { escapeEmailHtml, sendSchoolEmail } from '../_shared/email.ts'
+import { escapeEmailHtml, getPublicAppUrl, sendSchoolEmail } from '../_shared/email.ts'
 
 const origins = (Deno.env.get('SCHOOLGUARD_ALLOWED_ORIGINS') ?? '').split(',').map(value => value.trim()).filter(Boolean)
 const genericFailure = 'Sign-in could not be completed. Check your credentials and try again.'
@@ -161,7 +161,7 @@ Deno.serve(async request => {
         let delivered = false
         for (let attempt = 0; attempt < 2 && !delivered; attempt++) {
           try {
-            const appUrl = (Deno.env.get('APP_PUBLIC_URL') ?? '').replace(/\/$/, '')
+            const appUrl = getPublicAppUrl()
             const link = `${appUrl}/${activity.user_role}/security`
             const ipLine = ipAddress ? `IP address: ${ipAddress}` : 'IP address: not available'
             await sendSchoolEmail({

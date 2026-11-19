@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { escapeEmailHtml, sendSchoolEmail } from '../_shared/email.ts'
+import { escapeEmailHtml, getPublicAppUrl, sendSchoolEmail } from '../_shared/email.ts'
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' }
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
@@ -11,7 +11,7 @@ async function hmac(secret: string, value: string) {
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))), byte=>byte.toString(16).padStart(2,'0')).join('')
 }
 async function sendStudentSetupEmail(admin: ReturnType<typeof createClient>, email: string, fullName: string, studentNumber: string) {
-  const publicUrl = Deno.env.get('APP_PUBLIC_URL')
+  const publicUrl = getPublicAppUrl()
   const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email, ...(publicUrl ? { options: { redirectTo: publicUrl } } : {}) })
   if (error || !data.properties?.action_link) throw new Error('Secure password setup link could not be created.')
   const safeLink = escapeEmailHtml(data.properties.action_link)
@@ -77,9 +77,11 @@ Deno.serve(async request => {
     if (error || !data) return reply({ error: 'We could not find an application using those details.' }, 404)
     let activationEmailStatus = data.activation_email_status ?? 'PENDING'
     let activationEmailNotice = ''
-    if (data.application_status === 'APPROVED' && data.approved_profile_id && activationEmailStatus !== 'SENT') {
+    if (data.application_status === 'APPROVED' && data.approved_profile_id) {
       const attemptedAt = data.activation_email_last_attempt_at ? Date.parse(data.activation_email_last_attempt_at) : 0
-      const canRetry = activationEmailStatus === 'PENDING' || (activationEmailStatus === 'FAILED' && Date.now() - attemptedAt >= 60_000)
+      // Recovery links are single-use and can expire. Permit a controlled
+      // resend after five minutes even if the previous email was delivered.
+      const canRetry = activationEmailStatus === 'PENDING' || ((activationEmailStatus === 'FAILED' || activationEmailStatus === 'SENT') && Date.now() - attemptedAt >= 5 * 60_000)
       const staleSend = activationEmailStatus === 'SENDING' && Date.now() - attemptedAt >= 5 * 60_000
       if (canRetry || staleSend) {
         let claim = admin.from('student_applications').update({ activation_email_status: 'SENDING', activation_email_last_attempt_at: new Date().toISOString() }).eq('id', data.id).eq('activation_email_status', activationEmailStatus)
@@ -101,6 +103,7 @@ Deno.serve(async request => {
           }
         } else activationEmailStatus = 'SENDING'
       } else if (activationEmailStatus === 'FAILED') activationEmailNotice = 'The secure setup email could not be sent yet. Please check again in a minute or contact the school office.'
+      else if (activationEmailStatus === 'SENT' && Date.now() - attemptedAt < 5 * 60_000) activationEmailNotice = 'A setup email was sent recently. If its link has expired, check the application status again after five minutes to receive a fresh link.'
       else activationEmailNotice = 'Your approved account setup email is being prepared. Check your registered email shortly.'
     }
     const application = { ...data, activation_email_status: activationEmailStatus, activation_email_notice: activationEmailNotice }
