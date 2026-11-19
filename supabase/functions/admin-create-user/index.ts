@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { escapeEmailHtml, getPublicAppUrl, sendSchoolEmail } from '../_shared/email.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -10,6 +11,27 @@ function respond(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
+
+function createTemporaryPassword() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%_-'
+  const bytes = crypto.getRandomValues(new Uint8Array(48))
+  return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join('')
+}
+
+async function sendAccountSetupEmail(email: string, fullName: string, role: 'teacher' | 'guard', identifier?: string) {
+  const setupUrl = `${getPublicAppUrl()}/set-password?email=${encodeURIComponent(email)}`
+  const roleName = role === 'teacher' ? 'teacher' : 'security guard'
+  const safeName = escapeEmailHtml(fullName)
+  const safeLink = escapeEmailHtml(setupUrl)
+  const identifierHtml = identifier ? `<p style="margin:0 0 18px;color:#475569;font-size:14px"><b>Teacher number:</b> ${escapeEmailHtml(identifier)}</p>` : ''
+  await sendSchoolEmail({
+    to: email,
+    subject: 'Your CampuSync account is ready',
+    preheader: 'Verify your school email and set your account password.',
+    text: `Hello ${fullName},\n\nThe school administrator created your ${roleName} account. Open the password setup page and request a six-digit verification code sent to this email. After verifying the code, choose your password:\n${setupUrl}${identifier ? `\n\nTeacher number: ${identifier}` : ''}\n\nThe code expires in five minutes. Never share it.`,
+    html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your CampuSync account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${safeName},</p><p style="margin:0 0 20px;color:#475569;font-size:15px;line-height:1.7">The school administrator created your ${roleName} account. Verify your email with a six-digit code, then choose a password for your account.</p>${identifierHtml}<p style="margin:0 0 20px"><a href="${safeLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Verify and set my password</a></p><p style="margin:0;color:#64756e;font-size:13px;line-height:1.6">Your verification code expires in five minutes. Never share it.</p>`,
   })
 }
 
@@ -44,8 +66,8 @@ Deno.serve(async (request) => {
   try { input = await request.json() } catch { return respond({ error: 'Invalid JSON body.' }, 400) }
   const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
   const fullName = typeof input.full_name === 'string' ? input.full_name.trim() : ''
-  const password = typeof input.password === 'string' ? input.password : ''
   const role = input.role
+  const password = role === 'teacher' || role === 'guard' ? createTemporaryPassword() : typeof input.password === 'string' ? input.password : ''
   const validRoles = ['administrator', 'guard', 'student', 'teacher', 'parent']
   if (!validRoles.includes(String(role))) return respond({ error: 'Unsupported role.' }, 400)
   if (role === 'student' && input.enrollment_type === 'RETURNING' && typeof input.existing_student_id === 'string') {
@@ -194,5 +216,24 @@ Deno.serve(async (request) => {
   }
   const { error: auditError } = await admin.from('audit_logs').insert(auditEvents)
   if (auditError) console.error('Could not record account provisioning audit event:', auditError.message)
-  return respond({ profile_id: profile.id, auth_user_id: created.user.id, role })
+  let setupEmailSent = false
+  let setupEmailNotice: string | null = null
+  if (role === 'teacher' || role === 'guard') {
+    try {
+      await sendAccountSetupEmail(email, fullName, role, role === 'teacher' ? String(input.teacher_id).trim() : undefined)
+      setupEmailSent = true
+    } catch {
+      setupEmailNotice = 'Account created, but the password setup email could not be sent. Use Reset password in User Accounts to send a verification code.'
+      console.error('New role account setup email delivery failed', { role, profile_id: profile.id })
+    }
+    await admin.from('audit_logs').insert({
+      actor_id: caller.id, actor_name_snapshot: caller.full_name, actor_email_snapshot: caller.email,
+      actor_role_snapshot: caller.role, entity_type: 'profiles', entity_id: profile.id,
+      entity_label: fullName, action: 'account_setup_email_delivery', module: 'accounts',
+      description: setupEmailSent ? 'Account password setup email sent' : 'Account password setup email delivery failed',
+      new_values: { email_sent: setupEmailSent, role }, changed_fields: ['email_sent'],
+      status: setupEmailSent ? 'success' : 'failed', details: {},
+    })
+  }
+  return respond({ profile_id: profile.id, auth_user_id: created.user.id, role, setupEmailSent, setupEmailNotice })
 })

@@ -62,8 +62,9 @@ export function UserManagement({ profile }: Props) {
   const [allSections, setAllSections] = useState<{id:string;name:string;grade_level:string}[]>([])
   const [teacherQr, setTeacherQr] = useState<{ token: string; teacherId: string; name: string; isNew?: boolean } | null>(null)
   const [teacherRegistration, setTeacherRegistration] = useState({ full_name:'', email:'', phone:'', teacher_id:'', designation:'' })
-  const [teacherTempPassword, setTeacherTempPassword] = useState('')
+  const [guardRegistration, setGuardRegistration] = useState({ full_name:'', email:'', phone:'' })
   const [creatingTeacher, setCreatingTeacher] = useState(false)
+  const [creatingGuard, setCreatingGuard] = useState(false)
 
   const refresh = async () => {
     if (!supabase) return
@@ -159,19 +160,27 @@ export function UserManagement({ profile }: Props) {
   }
   const createTeacher = async (event: FormEvent) => {
     event.preventDefault(); if (!supabase) return
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%'
-    const password = Array.from(crypto.getRandomValues(new Uint8Array(24)), n => alphabet[n % alphabet.length]).join('')
     setCreatingTeacher(true); setMessage('Creating teacher account…')
-    const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { role:'teacher', full_name:teacherRegistration.full_name.trim(), email:teacherRegistration.email.trim(), phone:teacherRegistration.phone.trim(), teacher_id:teacherRegistration.teacher_id.trim(), designation:teacherRegistration.designation.trim(), password } })
-    if (error || data?.error) { setCreatingTeacher(false); setMessage(friendlyError(error ?? data.error)); return }
-    setTeacherTempPassword(password)
+    const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { role:'teacher', full_name:teacherRegistration.full_name.trim(), email:teacherRegistration.email.trim(), phone:teacherRegistration.phone.trim(), teacher_id:teacherRegistration.teacher_id.trim(), designation:teacherRegistration.designation.trim() } })
+    if (error || data?.error) { setCreatingTeacher(false); setMessage(data?.error ?? friendlyError(error)); return }
     const { data: teacher } = await supabase.from('teachers').select('id').eq('profile_id', data.profile_id).maybeSingle()
+    let qrNotice = ''
     if (teacher?.id) {
       const { data: qr, error: qrError } = await supabase.rpc('issue_qr_credential', { p_person_type:'teacher', p_person_id:teacher.id })
       if (!qrError && typeof qr === 'string') setTeacherQr({ token:qr, teacherId:teacherRegistration.teacher_id, name:teacherRegistration.full_name, isNew:true })
-      else setMessage('Teacher account created. The QR credential could not be issued; use Replace QR after refreshing.')
+      else qrNotice = ' The QR credential could not be issued; use Replace QR after refreshing.'
     }
     setTeacherRegistration({ full_name:'', email:'', phone:'', teacher_id:'', designation:'' }); setCreatingTeacher(false); await refresh()
+    setMessage(`${data.setupEmailSent ? 'Teacher account created. A password setup email was sent to the teacher.' : data.setupEmailNotice ?? 'Teacher account created.'}${qrNotice}`)
+  }
+  const createGuard = async (event: FormEvent) => {
+    event.preventDefault(); if (!supabase) return
+    setCreatingGuard(true); setMessage('Creating guard account…')
+    const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { role:'guard', full_name:guardRegistration.full_name.trim(), email:guardRegistration.email.trim(), phone:guardRegistration.phone.trim() } })
+    setCreatingGuard(false)
+    if (error || data?.error) { setMessage(data?.error ?? friendlyError(error)); return }
+    setGuardRegistration({ full_name:'', email:'', phone:'' }); await refresh()
+    setMessage(data.setupEmailSent ? 'Guard account created. A password setup email was sent to the guard.' : data.setupEmailNotice ?? 'Guard account created.')
   }
   const activity = async (account: Account) => {
     if (!supabase) return
@@ -182,7 +191,8 @@ export function UserManagement({ profile }: Props) {
 
   return <Frame title="User management" subtitle="Find and administer existing accounts by role.">
     <div className="flex gap-2 overflow-x-auto rounded-2xl border bg-white p-2">{roles.map((r) => <button key={r.id} onClick={() => setRole(r.id)} className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold ${role === r.id ? 'bg-[var(--color-brand-dark)] text-white' : 'text-slate-600 hover:bg-slate-50'}`}>{r.label}</button>)}</div>
-    {role === 'teacher' && <section className="rounded-3xl border bg-white p-5 shadow-sm"><h3 className="text-lg font-bold">Register new teacher</h3><p className="mb-4 text-sm text-slate-500">Creates the teacher account in the existing directory. Share the generated temporary password through the school’s approved secure channel.</p><form onSubmit={e=>void createTeacher(e)} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><input required maxLength={120} placeholder="Full name" value={teacherRegistration.full_name} onChange={e=>setTeacherRegistration(v=>({...v,full_name:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input required type="email" placeholder="School email" value={teacherRegistration.email} onChange={e=>setTeacherRegistration(v=>({...v,email:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input required placeholder="Teacher number" value={teacherRegistration.teacher_id} onChange={e=>setTeacherRegistration(v=>({...v,teacher_id:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input placeholder="Designation" value={teacherRegistration.designation} onChange={e=>setTeacherRegistration(v=>({...v,designation:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input placeholder="Contact number" value={teacherRegistration.phone} onChange={e=>setTeacherRegistration(v=>({...v,phone:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><button disabled={creatingTeacher} className="rounded-xl bg-emerald-800 px-4 py-2.5 font-semibold text-white disabled:opacity-50 sm:col-span-2 xl:col-span-5">{creatingTeacher?'Creating…':'Create teacher account'}</button></form>{teacherTempPassword&&<div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm"><b>One-time temporary password</b><p className="mt-1 select-all font-mono">{teacherTempPassword}</p><button onClick={()=>void navigator.clipboard?.writeText(teacherTempPassword)} className="mt-2 rounded-lg border bg-white px-3 py-1.5">Copy password</button><button onClick={()=>setTeacherTempPassword('')} className="ml-2 rounded-lg border bg-white px-3 py-1.5">Hide</button></div>}</section>}
+    {role === 'teacher' && <section className="rounded-3xl border bg-white p-5 shadow-sm"><h3 className="text-lg font-bold">Register new teacher</h3><p className="mb-4 text-sm text-slate-500">Creates the teacher account and emails a secure password setup link. The teacher verifies their email with a code before choosing a password.</p><form onSubmit={e=>void createTeacher(e)} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><input required maxLength={120} placeholder="Full name" value={teacherRegistration.full_name} onChange={e=>setTeacherRegistration(v=>({...v,full_name:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input required type="email" placeholder="School email" value={teacherRegistration.email} onChange={e=>setTeacherRegistration(v=>({...v,email:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input required placeholder="Teacher number" value={teacherRegistration.teacher_id} onChange={e=>setTeacherRegistration(v=>({...v,teacher_id:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input placeholder="Designation" value={teacherRegistration.designation} onChange={e=>setTeacherRegistration(v=>({...v,designation:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input placeholder="Contact number" value={teacherRegistration.phone} onChange={e=>setTeacherRegistration(v=>({...v,phone:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><button disabled={creatingTeacher} className="rounded-xl bg-emerald-800 px-4 py-2.5 font-semibold text-white disabled:opacity-50 sm:col-span-2 xl:col-span-5">{creatingTeacher?'Creating…':'Create teacher account'}</button></form></section>}
+    {role === 'guard' && <section className="rounded-3xl border bg-white p-5 shadow-sm"><h3 className="text-lg font-bold">Register new guard</h3><p className="mb-4 text-sm text-slate-500">Creates an administrator-managed guard account and emails a secure password setup link. The guard verifies their email with a code before choosing a password.</p><form onSubmit={e=>void createGuard(e)} className="grid gap-3 sm:grid-cols-3"><input required maxLength={120} placeholder="Full name" value={guardRegistration.full_name} onChange={e=>setGuardRegistration(v=>({...v,full_name:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input required type="email" placeholder="School email" value={guardRegistration.email} onChange={e=>setGuardRegistration(v=>({...v,email:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><input type="tel" placeholder="Contact number" value={guardRegistration.phone} onChange={e=>setGuardRegistration(v=>({...v,phone:e.target.value}))} className="rounded-xl border px-3 py-2.5"/><button disabled={creatingGuard} className="rounded-xl bg-emerald-800 px-4 py-2.5 font-semibold text-white disabled:opacity-50 sm:col-span-3">{creatingGuard?'Creating…':'Create guard account'}</button></form></section>}
     <section className="rounded-3xl border border-[var(--color-border)] bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{roles.find((r) => r.id === role)?.label} directory</h3><p className="text-sm text-slate-500">{filtered.length} matching account{filtered.length === 1 ? '' : 's'}</p></div><button onClick={() => void refresh()} className="rounded-xl border px-3 py-2 text-sm">Refresh</button></div>
       <div className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
