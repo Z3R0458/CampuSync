@@ -36,6 +36,10 @@ export interface AttendanceScanResult {
   eventType: GateEventType
   scannedAt: string
   syncStatus: 'SYNCED' | 'PENDING' | 'NEEDS_REVIEW'
+  guardId?: string
+  guardName?: string
+  scanOrigin?: 'ONLINE' | 'OFFLINE'
+  synchronizedAt?: string
   message: string
 }
 
@@ -164,6 +168,10 @@ function mapServerResult(result: Record<string, unknown>, eventType: GateEventTy
     eventType: eventType,
     scannedAt: typeof result.scanned_at === 'string' ? result.scanned_at : new Date().toISOString(),
     syncStatus: status,
+    guardId: typeof result.scanning_guard_id === 'string' ? result.scanning_guard_id : undefined,
+    guardName: typeof result.scanning_guard_name === 'string' ? result.scanning_guard_name : undefined,
+    scanOrigin: result.scan_origin === 'OFFLINE' ? 'OFFLINE' : 'ONLINE',
+    synchronizedAt: typeof result.synchronized_at === 'string' ? result.synchronized_at : undefined,
     message: status === 'SYNCED' ? 'Credential verified and attendance recorded.' : 'Saved for manual review because the event time is out of sequence.',
   }
 }
@@ -183,6 +191,8 @@ export async function recordQrScan(qrToken: string, eventType: GateEventType, de
         p_event_type: eventType,
         p_scanned_at: scannedAt,
         p_device_id: deviceId,
+        p_expected_guard_id: guardId,
+        p_offline_origin: false,
       })
     if (error) throw new Error(error.message)
     const result = mapServerResult(data as Record<string, unknown>, eventType)
@@ -300,6 +310,7 @@ export async function recordManualScan(
     const { data, error } = await supabase.rpc('record_manual_attendance', {
       p_event_id: eventId, p_person_type: person.personType, p_person_id: person.personId,
       p_event_type: eventType, p_scanned_at: scannedAt, p_device_id: deviceId,
+      p_expected_guard_id: guardId, p_offline_origin: false,
     })
     if (error) throw new Error(error.message)
     const result = mapServerResult(data as Record<string, unknown>, eventType)
@@ -325,10 +336,12 @@ export async function syncPendingAttendance() {
         ? await supabase.rpc('record_manual_attendance', {
           p_event_id: event.id, p_person_type: event.personType, p_person_id: event.personId,
           p_event_type: event.eventType, p_scanned_at: event.scanTimestamp, p_device_id: event.deviceId,
+          p_expected_guard_id: event.guardId, p_offline_origin: true,
         })
         : await supabase.rpc('record_attendance_scan', {
           p_event_id: event.id, p_qr_token: event.qrToken, p_event_type: event.eventType,
           p_scanned_at: event.scanTimestamp, p_device_id: event.deviceId,
+          p_expected_guard_id: event.guardId, p_offline_origin: true,
         })
       if (error) {
         if (error.code === '22023' || error.code === '42501') await markNeedsReview(event.id, error.message)

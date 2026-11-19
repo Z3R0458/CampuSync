@@ -1551,6 +1551,8 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
                 <p className="mt-1">{lastScan.displayId}{lastScan.gradeLevel ? ` · ${lastScan.gradeLevel}` : ''}</p>
                 <p className="mt-3 font-semibold text-[var(--color-brand-dark)]">{lastScan.eventType.replace('_', ' ')} · {lastScan.syncStatus}</p>
                 <p className="mt-1">{formatPhilippineDateTime(lastScan.scannedAt)}</p>
+                <p className="mt-2 text-xs font-medium">Recorded by: {lastScan.guardName ?? profile.full_name} · {lastScan.syncStatus === 'PENDING' ? 'Offline queue; awaiting server validation' : `Guard account${lastScan.scanOrigin === 'OFFLINE' ? ' · synchronized offline scan' : ''}`}</p>
+                {lastScan.syncStatus === 'SYNCED' && lastScan.synchronizedAt && <p className="mt-1 text-xs">Synced: {formatPhilippineDateTime(lastScan.synchronizedAt)}</p>}
                 <p className="mt-3 text-xs">{lastScan.message}</p>
               </div>
             ) : 'Scan a QR credential to validate it and record the selected gate event.'}
