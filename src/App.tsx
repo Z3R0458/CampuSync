@@ -60,6 +60,7 @@ import { StudentRequestReview } from './admin/StudentRequestReview'
 import { ParentLinkRequests } from './admin/ParentLinkRequests'
 import { ParentPortal } from './parent/ParentPortal'
 import { StudentRegistration } from './student/StudentRegistration'
+import { SetPasswordPage } from './components/SetPasswordPage'
 import { StudentApplications } from './admin/StudentApplications'
 import { GuardEarlyOutApprovals } from './guard/GuardEarlyOutApprovals'
 import { FeedbackProvider, friendlyError, useFeedback } from './components/UserFeedback'
@@ -403,6 +404,7 @@ function AuthGate() {
   if (!isSupabaseConfigured || !supabase) {
     return <main className="mx-auto mt-20 max-w-xl rounded-3xl bg-white p-8 text-center shadow"><h1 className="text-2xl font-bold">Supabase configuration required</h1><p className="mt-3 text-sm text-slate-600">Set the project URL and publishable key in .env.local, then restart Vite.</p></main>
   }
+  if (location.pathname === '/set-password') return <SetPasswordPage />
   if (session === undefined || profileLoading) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-600">Loading CampuSync securely…</main>
   }

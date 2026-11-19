@@ -12,7 +12,7 @@ async function hmac(secret: string, value: string) {
 }
 async function sendStudentSetupEmail(admin: ReturnType<typeof createClient>, email: string, fullName: string, studentNumber: string) {
   const publicUrl = getPublicAppUrl()
-  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email, ...(publicUrl ? { options: { redirectTo: publicUrl } } : {}) })
+  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo: `${publicUrl}/set-password` } })
   if (error || !data.properties?.action_link) throw new Error('Secure password setup link could not be created.')
   const safeLink = escapeEmailHtml(data.properties.action_link)
   await sendSchoolEmail({
