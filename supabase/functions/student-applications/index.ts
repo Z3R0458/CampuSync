@@ -10,17 +10,16 @@ async function hmac(secret: string, value: string) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name:'HMAC', hash:'SHA-256' }, false, ['sign'])
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))), byte=>byte.toString(16).padStart(2,'0')).join('')
 }
-async function sendStudentSetupEmail(admin: ReturnType<typeof createClient>, email: string, fullName: string, studentNumber: string) {
+async function sendStudentSetupEmail(_admin: ReturnType<typeof createClient>, email: string, fullName: string, studentNumber: string) {
   const publicUrl = getPublicAppUrl()
-  const { data, error } = await admin.auth.admin.generateLink({ type: 'recovery', email, options: { redirectTo: `${publicUrl}/set-password` } })
-  if (error || !data.properties?.action_link) throw new Error('Secure password setup link could not be created.')
-  const safeLink = escapeEmailHtml(data.properties.action_link)
+  const setupUrl = `${publicUrl}/set-password?email=${encodeURIComponent(email)}`
+  const safeLink = escapeEmailHtml(setupUrl)
   await sendSchoolEmail({
     to: email,
     subject: 'Your CampuSync student account is ready',
-    preheader: 'Set your password, then verify your first sign-in.',
-    text: `Hello ${fullName},\n\nYour student application has been approved. Use this secure link to choose your password:\n${data.properties.action_link}\n\nStudent number: ${studentNumber}\nAfter setting your password, sign in with your school email. CampuSync will send a one-time verification code for your first sign-in. This setup link expires; request a new one by checking your application status again.`,
-    html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your CampuSync student account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${escapeHtml(fullName)},</p><p style="margin:0 0 22px;color:#475569;font-size:15px;line-height:1.7">Your student application has been approved. Use the secure link below to choose your own password. CampuSync will send a one-time verification code when you sign in for the first time.</p><p style="margin:0 0 22px"><a href="${safeLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Set my password</a></p><div style="padding:14px 16px;border:1px solid #e2ebe6;border-radius:12px;background:#f8fbf9;color:#475569;font-size:14px;line-height:1.7"><b style="color:#16332a">Student number:</b> ${escapeHtml(studentNumber)}</div><p style="margin:18px 0 0;color:#64756e;font-size:13px;line-height:1.6">This secure link expires. If you did not request a school account, contact Valencia National High School.</p>`,
+    preheader: 'Verify your email to set the password for your new student account.',
+    text: `Hello ${fullName},\n\nYour student application has been approved. Open the CampuSync password setup page and request a six-digit code sent to this email. After the code is verified, you can choose your password:\n${setupUrl}\n\nStudent number: ${studentNumber}\nThe code expires in five minutes. Never share it.`,
+    html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Your CampuSync student account is ready</h1><p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.7">Hello ${escapeHtml(fullName)},</p><p style="margin:0 0 22px;color:#475569;font-size:15px;line-height:1.7">Your student application has been approved. Open the secure password setup page and request a six-digit code sent to this email. After verifying the code, you can choose your password.</p><p style="margin:0 0 22px"><a href="${safeLink}" style="display:inline-block;padding:13px 22px;border-radius:10px;background:#11865d;color:#fff;text-decoration:none;font-size:15px;font-weight:700">Verify and set my password</a></p><div style="padding:14px 16px;border:1px solid #e2ebe6;border-radius:12px;background:#f8fbf9;color:#475569;font-size:14px;line-height:1.7"><b style="color:#16332a">Student number:</b> ${escapeHtml(studentNumber)}</div><p style="margin:18px 0 0;color:#64756e;font-size:13px;line-height:1.6">The code expires in five minutes. If you did not request a school account, contact Valencia National High School.</p>`,
   })
 }
 

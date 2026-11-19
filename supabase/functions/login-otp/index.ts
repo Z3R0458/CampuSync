@@ -182,6 +182,78 @@ Deno.serve(async request => {
   try { input = await request.json() as Record<string, unknown> } catch { return respond(origin, { error: genericFailure }, 400) }
   const action = input.action
 
+  if (action === 'password-reset-start') {
+    const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return respond(origin, { error: 'Enter a valid school email address.' }, 400)
+    if (!(await rate(`password-reset:${email}`, 900, 4)) || !(await rate('password-reset-ip', 900, 12))) return respond(origin, { error: 'Too many reset requests. Wait a few minutes and try again.' }, 429)
+    const { data: profile } = await admin.from('profiles').select('auth_user_id,is_active').eq('email', email).maybeSingle()
+    let authUserId: string | null = null
+    let registeredEmail = email
+    if (profile?.is_active && profile.auth_user_id) {
+      const { data: authRecord } = await admin.auth.admin.getUserById(profile.auth_user_id)
+      if (authRecord.user?.email?.toLowerCase() === email) { authUserId = authRecord.user.id; registeredEmail = authRecord.user.email }
+    }
+    const now = new Date()
+    const challengeId = crypto.randomUUID()
+    const code = authUserId ? await makeCode() : '000000'
+    if (authUserId) await admin.from('password_reset_otp_challenges').update({ code_consumed_at: now.toISOString() }).eq('auth_user_id', authUserId).is('code_consumed_at', null)
+    const { error: insertError } = await admin.from('password_reset_otp_challenges').insert({
+      id: challengeId, auth_user_id: authUserId, email: registeredEmail,
+      otp_hmac: await hmac(hmacSecret, `${challengeId}:${code}`),
+      expires_at: new Date(now.getTime() + 5 * 60_000).toISOString(),
+    })
+    if (insertError) return respond(origin, { error: 'The password reset service is temporarily unavailable. Try again shortly.' }, 503)
+    if (authUserId) {
+      const subject = 'Your CampuSync password reset code'
+      try {
+        await sendSchoolEmail({
+          to: registeredEmail, subject, preheader: 'Use this one-time code to reset your CampuSync password.',
+          text: `Use this code to verify your password reset request: ${code}\n\nThe code expires in 5 minutes. Never share it with anyone. If you did not request this reset, ignore this email.`,
+          html: `<h1 style="margin:4px 0 12px;color:#16332a;font-size:24px;line-height:1.3">Reset your CampuSync password</h1><p style="margin:0 0 20px;color:#475569;font-size:15px;line-height:1.7">Enter this one-time code to verify your password reset request:</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px;background:#f0f8f4;border:1px solid #d8ede1;border-radius:14px"><tr><td align="center" style="padding:22px 12px"><div style="margin-bottom:8px;color:#557064;font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">Password reset code</div><div style="color:#087a53;font-size:34px;font-weight:700;letter-spacing:9px">${code}</div></td></tr></table><p style="margin:0 0 10px;color:#475569;font-size:14px;line-height:1.7">This code expires in <b>5 minutes</b>.</p><p style="margin:0;color:#64756e;font-size:13px;line-height:1.6">Never share this code. If you did not request a password reset, ignore this email.</p>`,
+        })
+        await logEvent('otp_sent', authUserId, registeredEmail, { verification_kind: 'PASSWORD_RESET' })
+      } catch {
+        await admin.from('password_reset_otp_challenges').update({ code_consumed_at: new Date().toISOString() }).eq('id', challengeId)
+        await logEvent('otp_delivery_failed', authUserId, registeredEmail, { verification_kind: 'PASSWORD_RESET' })
+        return respond(origin, { error: 'We could not send the verification code. Please try again shortly.' }, 503)
+      }
+    }
+    return respond(origin, { challengeId, maskedEmail: maskEmail(email), expiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(), resendAt: new Date(now.getTime() + 60_000).toISOString() })
+  }
+
+  if (action === 'password-reset-verify') {
+    const challengeId = typeof input.challengeId === 'string' ? input.challengeId : ''
+    const code = typeof input.code === 'string' ? input.code : ''
+    if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) return respond(origin, { error: 'Invalid or expired verification code.' }, 400)
+    if (!(await rate(`password-reset-verify:${challengeId}`, 900, 8)) || !(await rate('password-reset-verify-ip', 900, 30))) return respond(origin, { error: 'Too many code attempts. Request a new code and try again.' }, 429)
+    const resetToken = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('')
+    const { data: rows, error } = await db.rpc('verify_password_reset_otp', {
+      p_challenge_id: challengeId, p_candidate_hmac: await hmac(hmacSecret, `${challengeId}:${code}`),
+      p_reset_token_hmac: await hmac(hmacSecret, `password-reset-grant:${resetToken}`),
+      p_reset_expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    })
+    if (error) { console.error('Password reset OTP verification failed', { code: error.code ?? 'unknown' }); return respond(origin, { error: 'Password reset verification is temporarily unavailable.' }, 503) }
+    const result = Array.isArray(rows) ? rows[0] : null
+    if (result?.result !== 'verified' || !result.auth_user_id) return respond(origin, { error: result?.result === 'incorrect' ? 'That code is incorrect. Try again.' : result?.result === 'locked' ? 'Too many incorrect attempts. Request a new code.' : result?.result === 'expired' ? 'That code expired. Request a new code.' : 'That code is invalid. Request a new code.' }, 400)
+    await logEvent('otp_verification_success', result.auth_user_id, '', { verification_kind: 'PASSWORD_RESET' })
+    return respond(origin, { resetToken, expiresIn: 600 })
+  }
+
+  if (action === 'password-reset-complete') {
+    const resetToken = typeof input.resetToken === 'string' ? input.resetToken : ''
+    const password = typeof input.password === 'string' ? input.password : ''
+    if (!/^[0-9a-f]{64}$/.test(resetToken)) return respond(origin, { error: 'Verify your email code before setting a password.' }, 401)
+    if (password.length < 12 || new TextEncoder().encode(password).length > 72) return respond(origin, { error: 'Use a password of at least 12 characters and no more than 72 bytes.' }, 400)
+    if (!(await rate('password-reset-complete', 900, 8))) return respond(origin, { error: 'Too many password reset attempts. Please wait and try again.' }, 429)
+    const { data: authUserId, error: grantError } = await db.rpc('consume_password_reset_grant', { p_reset_token_hmac: await hmac(hmacSecret, `password-reset-grant:${resetToken}`) })
+    if (grantError) return respond(origin, { error: 'Password reset verification is temporarily unavailable.' }, 503)
+    if (!authUserId) return respond(origin, { error: 'Your verification expired or has already been used. Request a new code.' }, 401)
+    const { error: updateError } = await admin.auth.admin.updateUserById(authUserId, { password })
+    if (updateError) { console.error('Verified password reset failed', { code: updateError.code ?? 'unknown' }); return respond(origin, { error: 'The password could not be updated. Request a new code and try again.' }, 400) }
+    await logEvent('otp_verification_success', authUserId, '', { verification_kind: 'PASSWORD_RESET_COMPLETED' })
+    return respond(origin, { success: true })
+  }
+
   if (action === 'start') {
     const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : ''
     const password = typeof input.password === 'string' ? input.password : ''

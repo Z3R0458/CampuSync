@@ -165,12 +165,12 @@ async function loginFunctionError(error: unknown, data: unknown, fallback: strin
 }
 
 function LoginScreen() {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [recoveryMessage, setRecoveryMessage] = useState('')
   const [challenge, setChallenge] = useState<{ id: string; email: string; expiresAt: string; resendAt: string; firstTime: boolean } | null>(null)
   const [code, setCode] = useState('')
   const [clockNow, setClockNow] = useState(Date.now())
@@ -226,10 +226,7 @@ function LoginScreen() {
     else { setChallenge({ ...challenge, expiresAt: data.expiresAt, resendAt: data.resendAt }); setCode('') }
   }
   const sendRecovery = async () => {
-    if (!supabase) return
-    if (!email.trim()) { setRecoveryMessage('Enter your account email first.'); return }
-    const { error: recoveryError } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo: `${window.location.origin}/` })
-    setRecoveryMessage(recoveryError?.message ?? 'If this email belongs to an account, a password recovery link has been sent.')
+    navigate(`/set-password${email.trim() ? `?email=${encodeURIComponent(email.trim().toLowerCase())}` : ''}`)
   }
 
   return (
@@ -285,7 +282,6 @@ function LoginScreen() {
             {import.meta.env.DEV && deviceDiagnostic && <details className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-slate-700"><summary className="cursor-pointer font-semibold">Development device diagnostic</summary><dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-all"><dt>navigator.userAgent</dt><dd>{deviceDiagnostic.user_agent}</dd><dt>navigator.platform</dt><dd>{navigator.platform || 'Unavailable'}</dd><dt>maxTouchPoints</dt><dd>{navigator.maxTouchPoints}</dd><dt>Operating system</dt><dd>{deviceDiagnostic.operating_system} {deviceDiagnostic.operating_system_version}</dd><dt>Browser</dt><dd>{deviceDiagnostic.browser} {deviceDiagnostic.browser_version}</dd><dt>Device category</dt><dd>{deviceDiagnostic.device_category}</dd><dt>Device ID</dt><dd>{deviceDiagnostic.device_identifier}</dd></dl></details>}
           </form>}
           <button type="button" onClick={() => void sendRecovery()} className="mt-3 block w-full text-right text-xs font-semibold text-emerald-800 underline">Forgot your password?</button>
-          {recoveryMessage && <p role="status" className="mt-2 text-xs text-slate-600">{recoveryMessage}</p>}
           <p className="mt-5 text-center text-sm text-slate-600">Parent or guardian? <Link to="/parent/register" className="font-semibold text-emerald-800 underline">Create an account</Link></p>
           <p className="mt-2 text-center text-sm text-slate-600">New student? <Link to="/student-registration" className="font-semibold text-emerald-800 underline">Apply for registration</Link></p>
           <div className="mt-6 flex items-start gap-3 rounded-xl border border-slate-200/80 bg-white/70 p-4">

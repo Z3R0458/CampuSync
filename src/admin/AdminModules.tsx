@@ -115,9 +115,9 @@ export function UserManagement({ profile }: Props) {
   }
   const sendReset = async (account: Account) => {
     if (!supabase) return
-    await confirmAction({ title: 'Send a password reset link?', description: 'A password reset email will be sent to this account.', itemName: account.email, confirmLabel: 'Send reset link', tone: 'primary', successMessage: `Password reset email sent to ${account.email}.`, onConfirm: async () => {
-      const { error } = await supabase!.auth.resetPasswordForEmail(account.email, { redirectTo: `${window.location.origin}/` })
-      if (error) throw error
+    await confirmAction({ title: 'Send a password reset code?', description: 'A six-digit verification code will be sent to this account. The user must verify the code before setting a new password.', itemName: account.email, confirmLabel: 'Send verification code', tone: 'primary', successMessage: `Password reset verification code sent to ${account.email}.`, onConfirm: async () => {
+      const { data, error } = await supabase!.functions.invoke('login-otp', { body: { action: 'password-reset-start', email: account.email } })
+      if (error || data?.error) throw new Error(data?.error ?? error?.message ?? 'Could not send the reset code.')
       const { error: logError } = await supabase!.rpc('record_password_reset_request', { p_target_profile: account.id })
       if (logError) throw logError
     } })
