@@ -580,10 +580,10 @@ function DashboardApp({ profile, onPhotoSaved }: { profile: ActiveProfile; onPho
                 <Route path="/guard/security" element={<RoleRoute profile={profile} role="guard"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/guard/*" element={<RoleRoute profile={profile} role="guard"><GuardDashboard profile={profile} /></RoleRoute>} />
                 <Route path="/student/security" element={<RoleRoute profile={profile} role="student"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
-                <Route path="/student/*" element={<RoleRoute profile={profile} role="student"><StudentPortal profile={profile} /></RoleRoute>} />
+                <Route path="/student/*" element={<RoleRoute profile={profile} role="student"><StudentPortal profile={profile} onPhotoSaved={onPhotoSaved} /></RoleRoute>} />
                 <Route path="/teacher/requests" element={<RoleRoute profile={profile} role="teacher"><DashboardShell title="Student Requests" subtitle="Review requests for your assigned students"><StudentRequestReview role="teacher" profileId={profile.id} /></DashboardShell></RoleRoute>} />
                 <Route path="/teacher/security" element={<RoleRoute profile={profile} role="teacher"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
-                <Route path="/teacher/*" element={<RoleRoute profile={profile} role="teacher"><TeacherPortal profile={profile} /></RoleRoute>} />
+                <Route path="/teacher/*" element={<RoleRoute profile={profile} role="teacher"><TeacherPortal profile={profile} onPhotoSaved={onPhotoSaved} /></RoleRoute>} />
                 <Route path="/parent/security" element={<RoleRoute profile={profile} role="parent"><DashboardShell title="Security & Login Activity" subtitle="Review the devices and sessions accessing your account"><SecurityLoginActivity profile={profile} /></DashboardShell></RoleRoute>} />
                 <Route path="/parent/*" element={<RoleRoute profile={profile} role="parent"><ParentPortal profile={profile} /></RoleRoute>} />
                 <Route path="*" element={<Navigate to={`/${profile.role}`} replace />} />
