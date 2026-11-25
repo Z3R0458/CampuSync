@@ -1,11 +1,11 @@
-const CACHE_NAME = 'campusync-shell-v4'
+const CACHE_NAME = 'campusync-shell-v5'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
   '/campusync-logo.png',
   '/favicon.ico',
-  '/favicon.svg?v=campusync-1',
-  '/favicon.png',
+  '/favicon.svg?v=campusync-2',
+  '/favicon.png?v=campusync-2',
   '/apple-touch-icon.png',
   '/icons/campusync-icon-192.png',
   '/icons/campusync-icon-512.png',
