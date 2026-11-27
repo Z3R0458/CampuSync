@@ -50,7 +50,7 @@ import { addPendingVisitor, getPendingSyncCount, getRecentQueuedAttendance, getR
 import { isSupabaseConfigured } from './lib/supabaseConfig'
 import { collectDeviceTrackingInfo } from './lib/deviceDetection'
 import { supabase } from './lib/supabase'
-import { getGuardStudentSnapshot, lookupGuardPerson, previewGuardQr, queueApprovedVisitorCheckIn, recordManualScan, recordQrScan, recoverSyncingEvents, refreshApprovedVisitorCache, refreshOfflineQrCache, registerGuardDevice, searchGuardStudents, syncPendingAttendance, syncPendingVisitors, type AttendanceScanResult } from './lib/attendance'
+import { getGuardStudentSnapshot, getOfflineQrCacheInfo, lookupGuardPerson, previewGuardQr, queueApprovedVisitorCheckIn, recordManualScan, recordQrScan, recoverSyncingEvents, refreshApprovedVisitorCache, refreshOfflineQrCache, registerGuardDevice, searchGuardStudents, syncPendingAttendance, syncPendingVisitors, type AttendanceScanResult } from './lib/attendance'
 import type { GateEventType } from './lib/db'
 import { UserManagement, EnrollmentManagement, DataExport } from './admin/AdminModules'
 import { AnnouncementFeed, AnnouncementManagement } from './admin/AnnouncementManagement'
@@ -1429,6 +1429,9 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
   const [snapshot, setSnapshot] = useState<{ inside_count: number; visitors_inside: number; recent_events: Record<string, unknown>[] } | null>(null)
   const [metrics,setMetrics]=useState<{entries_today:number;exits_today:number;early_outs_today:number;inside_count:number;visitors_inside:number;pending_visitors:number}|null>(null)
   const [lastScan, setLastScan] = useState<AttendanceScanResult | null>(null)
+  const [offlineQrCache,setOfflineQrCache]=useState<{count:number;refreshedAt:string|null}>({count:0,refreshedAt:null})
+  const [refreshingOfflineQrCache,setRefreshingOfflineQrCache]=useState(false)
+  const [offlineQrCacheMessage,setOfflineQrCacheMessage]=useState('')
 
   useEffect(() => {
     let active = true
@@ -1476,6 +1479,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
         try {
           await ensureServerDevice()
           await refreshOfflineQrCache()
+          setOfflineQrCache(await getOfflineQrCacheInfo())
           await syncQueues()
           await loadSnapshot()
         } catch (error) {
@@ -1486,6 +1490,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
     const initialize = async () => {
       await recoverSyncingEvents()
       void refreshLocalState()
+      void getOfflineQrCacheInfo().then(setOfflineQrCache).catch(() => undefined)
       try {
         const registeredId = await registerGuardDevice(profile.id)
         if (!active) return
@@ -1496,7 +1501,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
         if (active) setDeviceError(friendlyError(error, 'Could not register this guard device.'))
       }
       if (navigator.onLine) {
-        try { await refreshOfflineQrCache() } catch (error) {
+        try { await refreshOfflineQrCache(); setOfflineQrCache(await getOfflineQrCacheInfo()) } catch (error) {
           if (active) setDeviceError(friendlyError(error, 'Could not load offline QR data.'))
         }
         await syncQueues()
@@ -1534,6 +1539,22 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
     return result
   }
 
+  const refreshOfflineCredentials = async () => {
+    if (!navigator.onLine) { setOfflineQrCacheMessage('Connect this device to the internet to refresh its QR cache.'); return }
+    setRefreshingOfflineQrCache(true); setOfflineQrCacheMessage('')
+    try {
+      const registeredId = await registerGuardDevice(profile.id)
+      setDeviceId(registeredId)
+      const count = await refreshOfflineQrCache()
+      const info = await getOfflineQrCacheInfo()
+      setOfflineQrCache(info)
+      setOfflineQrCacheMessage(`${count} active student and teacher QR credentials are ready for offline scans for up to 24 hours.`)
+      setDeviceError('')
+    } catch (error) {
+      setOfflineQrCacheMessage(friendlyError(error, 'Could not refresh offline QR credentials.'))
+    } finally { setRefreshingOfflineQrCache(false) }
+  }
+
   const path = location.pathname.replace(/\/$/, '') || '/guard'
   const isDashboard = path === '/guard'
   const isScanner = path === '/guard/scanner'
@@ -1566,6 +1587,11 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
             disabled={!deviceId}
           />
           <p className="mt-3 text-xs leading-5 text-slate-500">Offline scans are saved on this device and synced when internet returns. The device must refresh its QR verification cache online at least once; cached credentials are accepted for up to 24 hours.</p>
+          <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs"><p className="font-semibold text-slate-800">Offline QR cache: {offlineQrCache.count} credentials</p><p className="mt-1 text-slate-500">Last sync: {offlineQrCache.refreshedAt ? formatPhilippineDateTime(offlineQrCache.refreshedAt) : 'Not synced on this device'}</p></div>
+            <button type="button" disabled={!isOnline||refreshingOfflineQrCache} onClick={()=>void refreshOfflineCredentials()} className="min-h-10 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50">{refreshingOfflineQrCache?'Syncing QR cache...':isOnline?'Refresh offline QR cache':'Connect to refresh cache'}</button>
+          </div>
+          {offlineQrCacheMessage&&<p role="status" className="mt-2 rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{offlineQrCacheMessage}</p>}
           {deviceError && <p role="status" className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">{deviceError}</p>}
         </section>
 

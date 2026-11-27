@@ -107,6 +107,13 @@ export async function refreshOfflineQrCache() {
   return credentials.length
 }
 
+export async function getOfflineQrCacheInfo() {
+  const credentials = await db.qrCache.toArray()
+  const refreshedAt = credentials.reduce<string | null>((latest, credential) =>
+    !latest || credential.cachedAt > latest ? credential.cachedAt : latest, null)
+  return { count: credentials.length, refreshedAt }
+}
+
 export async function refreshApprovedVisitorCache() {
   if (!supabase || !navigator.onLine) return getCachedVisitorApprovals()
   const { data, error } = await supabase.rpc('list_guard_expected_visitors')
@@ -212,7 +219,7 @@ export async function recordQrScan(qrToken: string, eventType: GateEventType, de
 
   const tokenHash = await hashToken(qrToken)
   const credential = await getCachedCredential(tokenHash)
-  if (!credential) throw new Error('This credential is not in the offline cache. Connect to the internet to verify it.')
+  if (!credential) throw new Error('This QR was not included in this device\'s last offline-cache sync. Connect to the internet, refresh the offline QR cache, then try again.')
   return queueOfflineAttendance(credential, eventType, deviceId, guardId, qrToken, 'CACHED_CREDENTIAL', eventId, scannedAt)
 }
 
