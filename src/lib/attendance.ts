@@ -60,7 +60,16 @@ export async function registerGuardDevice(profileId: string) {
 
   if (!navigator.onLine) {
     if (existingId) return existingId
-    throw new Error('This device must be registered online before it can record offline attendance.')
+    // Keep a local device identity so the camera and offline queue can work.
+    // The server binds this ID to the authenticated guard before queued scans sync.
+    const provisionalId = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
+        const value = crypto.getRandomValues(new Uint8Array(1))[0] & 15
+        return (char === 'x' ? value : (value & 3) | 8).toString(16)
+      })
+    try { localStorage.setItem(deviceStorageKey(profileId), provisionalId) } catch { /* Current session can still queue pending scans. */ }
+    return provisionalId
   }
 
   const { data, error } = await supabase.rpc('register_guard_device', {

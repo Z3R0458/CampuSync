@@ -1432,6 +1432,8 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
 
   useEffect(() => {
     let active = true
+    let serverDeviceRegistered = false
+    let deviceRegistration: Promise<string> | null = null
     const refreshLocalState = async () => {
       const [count, events] = await Promise.all([getPendingSyncCount(), getRecentQueuedAttendance()])
       if (active) {
@@ -1440,6 +1442,28 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
       }
     }
     const updateConnection = () => setIsOnline(navigator.onLine)
+    const ensureServerDevice = async () => {
+      if (!navigator.onLine) return false
+      if (serverDeviceRegistered) return true
+      if (!deviceRegistration) deviceRegistration = registerGuardDevice(profile.id)
+      try {
+        const registeredId = await deviceRegistration
+        serverDeviceRegistered = true
+        if (active) { setDeviceId(registeredId); setDeviceError('') }
+        return true
+      } finally { deviceRegistration = null }
+    }
+    const syncQueues = async () => {
+      if (!navigator.onLine) return
+      try {
+        if (!await ensureServerDevice()) return
+        await syncPendingAttendance()
+        await syncPendingVisitors()
+        await refreshLocalState()
+      } catch (error) {
+        if (active) setDeviceError(friendlyError(error, 'Could not register this device and synchronize queued scans.'))
+      }
+    }
     const loadSnapshot = async () => {
       if (!navigator.onLine || !supabase) return
       const [snap,counts] = await Promise.all([supabase.rpc('get_guard_dashboard_snapshot'),supabase.rpc('get_guard_dashboard_metrics')])
@@ -1448,10 +1472,16 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
     }
     const handleOnline = () => {
       updateConnection()
-      void refreshOfflineQrCache().catch((error) => setDeviceError(friendlyError(error)))
-      void syncPendingAttendance().then(() => refreshLocalState())
-      void syncPendingVisitors().then(() => refreshLocalState())
-      void loadSnapshot()
+      void (async () => {
+        try {
+          await ensureServerDevice()
+          await refreshOfflineQrCache()
+          await syncQueues()
+          await loadSnapshot()
+        } catch (error) {
+          if (active) setDeviceError(friendlyError(error, 'Could not reconnect this guard device.'))
+        }
+      })()
     }
     const initialize = async () => {
       await recoverSyncingEvents()
@@ -1459,6 +1489,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
       try {
         const registeredId = await registerGuardDevice(profile.id)
         if (!active) return
+        serverDeviceRegistered = navigator.onLine
         setDeviceId(registeredId)
         setDeviceError('')
       } catch (error) {
@@ -1468,8 +1499,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
         try { await refreshOfflineQrCache() } catch (error) {
           if (active) setDeviceError(friendlyError(error, 'Could not load offline QR data.'))
         }
-        await syncPendingAttendance()
-        await syncPendingVisitors()
+        await syncQueues()
         await loadSnapshot()
         await refreshLocalState()
       }
@@ -1477,8 +1507,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
     void initialize()
     const timer = window.setInterval(() => {
       void refreshLocalState()
-      void syncPendingAttendance().then(() => refreshLocalState())
-      void syncPendingVisitors().then(() => refreshLocalState())
+      void syncQueues()
       void loadSnapshot()
     }, 15_000)
     window.addEventListener('online', updateConnection)
@@ -1495,7 +1524,9 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
 
   const handleScan = async (qrToken: string, eventType: GateEventType) => {
     if (!deviceId) throw new Error(deviceError || 'This guard device is not registered yet.')
-    const result = await recordQrScan(qrToken, eventType, deviceId, profile.id)
+    const activeDeviceId = navigator.onLine ? await registerGuardDevice(profile.id) : deviceId
+    if (activeDeviceId !== deviceId) setDeviceId(activeDeviceId)
+    const result = await recordQrScan(qrToken, eventType, activeDeviceId, profile.id)
     setLastScan(result)
     setScanError('')
     await Promise.all([getPendingSyncCount().then(setPendingCount), getRecentQueuedAttendance().then(setQueuedEvents)])
@@ -1534,6 +1565,7 @@ function GuardDashboard({ profile }: { profile: ActiveProfile }) {
             onScan={handleScan}
             disabled={!deviceId}
           />
+          <p className="mt-3 text-xs leading-5 text-slate-500">Offline scans are saved on this device and synced when internet returns. The device must refresh its QR verification cache online at least once; cached credentials are accepted for up to 24 hours.</p>
           {deviceError && <p role="status" className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">{deviceError}</p>}
         </section>
 
